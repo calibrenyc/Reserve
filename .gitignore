@@ -1,0 +1,33 @@
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Node dependencies & builds
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# SQLite Database & Local Data
+backend/data/
+data/database/
+data/ocr_models/
+data/invoices/
+data/backups/
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary & Test files
+/tmp/
+test_*.py
+run_*.py
+fix_*.py
+*.txt
+*.log
+
+# OS / IDE files
+.DS_Store
+.vscode/
+.idea/
