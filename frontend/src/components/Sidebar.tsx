@@ -16,7 +16,7 @@ import {
   ArrowLeftRight,
   FolderOpen
 } from 'lucide-react';
-import reserveLogo from '../assets/reserve-logo-black.png';
+import reserveLogo from '../assets/reserve-logo.png';
 
 interface SidebarProps {
   currentTab: string;
@@ -74,11 +74,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
 
   return (
     <aside className="w-64 bg-zinc-800 border-r border-zinc-700 flex flex-col h-screen select-none">
-      <div className="p-3 border-b border-zinc-700 bg-black">
+      <div className="px-4 py-5 border-b border-zinc-700 bg-black">
         <img
           src={reserveLogo}
           alt="Reserve"
-          className="w-full h-auto max-h-28 object-contain"
+          className="w-full h-auto object-contain"
         />
       </div>
 

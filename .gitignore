@@ -26,6 +26,7 @@ run_*.py
 fix_*.py
 *.txt
 *.log
+!requirements.txt
 
 # OS / IDE files
 .DS_Store
