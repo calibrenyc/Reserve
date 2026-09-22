@@ -4,18 +4,21 @@ from typing import List, Optional
 from decimal import Decimal
 
 from backend.app.database import get_db
-from backend.app.models import InventoryItem, UnitConversion, CostHistory
+from backend.app.models import InventoryItem, UnitConversion, CostHistory, ItemCategory, StorageArea
+from backend.app.security import require
 from backend.app.schemas import InventoryItemCreate, InventoryItemResponse, UnitConversionCreate, UnitConversionResponse
 
 router = APIRouter(prefix="/api/items", tags=["Inventory Items"])
 
 @router.get("", response_model=List[InventoryItemResponse])
-def list_inventory_items(category: Optional[str] = None, key_items_only: bool = False, db: Session = Depends(get_db)):
-    query = db.query(InventoryItem).filter(InventoryItem.is_active == True)
+def list_inventory_items(category: Optional[str] = None, storage_area: Optional[str] = None, needs_review: Optional[bool] = None, include_archived: bool = False, key_items_only: bool = False, db: Session = Depends(get_db)):
+    query = db.query(InventoryItem) if include_archived else db.query(InventoryItem).filter(InventoryItem.is_active == True)
     if category:
         query = query.filter(InventoryItem.category == category)
     if key_items_only:
         query = query.filter(InventoryItem.is_key_item == True)
+    if storage_area: query = query.filter(InventoryItem.storage_location == storage_area)
+    if needs_review is not None: query = query.filter(InventoryItem.needs_review == needs_review)
     return query.all()
 
 @router.post("", response_model=InventoryItemResponse)
@@ -42,6 +45,39 @@ def create_inventory_item(item_in: InventoryItemCreate, db: Session = Depends(ge
     db.commit()
     db.refresh(item)
     return item
+
+@router.patch("/{item_id}")
+def update_item(item_id: str, payload: dict, db: Session = Depends(get_db)):
+    item = db.get(InventoryItem, item_id)
+    if not item: raise HTTPException(404, "Item not found")
+    allowed = {"name", "display_name", "description", "category", "subcategory", "storage_location", "base_uom", "count_uom", "purchase_uom", "recipe_uom", "pack_size", "case_size", "conversion_factor", "current_cost", "par_level", "notes", "needs_review", "is_active"}
+    for key, value in payload.items():
+        if key in allowed: setattr(item, key, value)
+    db.commit(); db.refresh(item); return item
+
+@router.post("/{item_id}/archive")
+def archive_item(item_id: str, db: Session = Depends(get_db)):
+    item = db.get(InventoryItem, item_id)
+    if not item: raise HTTPException(404, "Item not found")
+    item.is_active = False; db.commit(); return {"id": item.id, "archived": True}
+
+@router.get("/catalog/categories")
+def categories(db: Session = Depends(get_db)): return db.query(ItemCategory).filter(ItemCategory.is_active == True).order_by(ItemCategory.sort_order, ItemCategory.name).all()
+
+@router.post("/catalog/categories")
+def create_category(payload: dict, db: Session = Depends(get_db)):
+    value = (payload.get("name") or "").strip()
+    if not value: raise HTTPException(400, "Category name is required")
+    obj = ItemCategory(name=value, sort_order=payload.get("sort_order", 0)); db.add(obj); db.commit(); return obj
+
+@router.get("/catalog/storage-areas")
+def storage_areas(db: Session = Depends(get_db)): return db.query(StorageArea).filter(StorageArea.is_active == True).order_by(StorageArea.sort_order, StorageArea.name).all()
+
+@router.post("/catalog/storage-areas")
+def create_storage_area(payload: dict, db: Session = Depends(get_db)):
+    value = (payload.get("name") or "").strip()
+    if not value: raise HTTPException(400, "Storage area name is required")
+    obj = StorageArea(name=value, location_id=payload.get("location_id"), sort_order=payload.get("sort_order", 0)); db.add(obj); db.commit(); return obj
 
 @router.patch("/{item_id}/cost")
 def update_item_cost(item_id: str, payload: dict, db: Session = Depends(get_db)):
@@ -81,4 +117,3 @@ def get_item_cost_history(item_id: str, db: Session = Depends(get_db)):
             } for h in history
         ]
     }
-

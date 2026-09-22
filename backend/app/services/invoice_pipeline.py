@@ -202,6 +202,8 @@ class TableReconstructor:
         return {"rows": rows, "table_rows": table_rows, "columns": columns, "bounds": bounds, "assigned_ids": assigned_ids, "debug": debug, "header_index": header_index, "header_tokens": header_tokens}
 
 class InvoiceImportPipeline:
+    def __init__(self, template_id: str = "auto"):
+        self.template_id = template_id
     def _labelled_fields(self, tokens: List[Token], slope: float) -> Dict[str, Any]:
         """Extract only label-adjacent values; never scan arbitrary page numbers."""
         aligned = lambda t: t.cy - slope * t.cx
@@ -241,6 +243,10 @@ class InvoiceImportPipeline:
         return {"fields": fields, "evidence": evidence}
 
     def run(self, document: OCRDocument) -> Dict[str, Any]:
+        # Import lazily to avoid a circular dependency: templates reuse the
+        # generic token/row primitives defined in this module.
+        from backend.app.services.vendor_templates import apply_vendor_template
+        template_result = apply_vendor_template(document, self.template_id)
         layout = TableReconstructor().reconstruct(document.tokens)
         labelled = self._labelled_fields(document.tokens, layout["debug"]["row_alignment_slope"])
         lines = []
@@ -261,5 +267,15 @@ class InvoiceImportPipeline:
         assigned = layout.get("assigned_ids", set())
         unassigned = [asdict(t) for t in document.tokens if id(t) not in assigned]
         diagnostics = {"ocr_token_count": len(document.tokens), "average_ocr_confidence": round(sum(t.confidence for t in document.tokens)/len(document.tokens),2) if document.tokens else 0, "candidate_table_regions_found": len(layout["debug"]["candidate_table_regions"]), "selected_table_region": layout.get("bounds"), "detected_headers": list(layout.get("columns", {})), "detected_columns": len(layout.get("columns", {})), "rows_detected": len(layout["table_rows"]), "tokens_assigned_to_invoice_fields": len(assigned), "unassigned_tokens": len(unassigned), "row_alignment_slope": layout["debug"]["row_alignment_slope"], "failure_reason": layout["debug"]["failure_reason"]}
-        debug = {"raw_ocr_tokens": token_data, "raw_ocr": document.raw_text, "tokens": token_data, "rows": [[asdict(t) for t in row] for row in layout["rows"]], "grouped_line_item_rows": lines, "table_rows": layout["table_rows"], "table_bounds": layout.get("bounds"), "columns": layout.get("columns", {}), "unassigned_tokens": unassigned, "diagnostics": diagnostics, "candidate_table_regions": layout["debug"]["candidate_table_regions"], "labelled_field_evidence": labelled["evidence"], "mode": "generic-spatial-table-reconstruction"}
+        debug = {"raw_ocr_tokens": token_data, "raw_ocr": document.raw_text, "tokens": token_data, "rows": [[asdict(t) for t in row] for row in layout["rows"]], "grouped_line_item_rows": lines, "table_rows": layout["table_rows"], "table_bounds": layout.get("bounds"), "columns": layout.get("columns", {}), "unassigned_tokens": unassigned, "diagnostics": diagnostics, "candidate_table_regions": layout["debug"]["candidate_table_regions"], "labelled_field_evidence": labelled["evidence"], "mode": "generic-spatial-table-reconstruction", "requested_template": self.template_id}
+        if template_result:
+            # Template values win only when validated through its text anchors
+            # and row math. Generic output remains in debug for audit/review.
+            template_lines = []
+            for index, line in enumerate(template_result["lines"], 1):
+                template_lines.append({"debug_id": f"{template_result['template_id']}_row_{index:03d}", "line_number": index, "vendor_sku": None, "description": line["description"], "quantity": line["quantity"], "unit_of_measure": None, "pack_size": line["pack_size"], "unit_cost": line["unit_cost"], "extended_cost": line["extended_cost"], "field_confidence": {}, "validation_status": line["validation_status"], "source_boxes": {"template_row": line["source_boxes"]}, "math_validation": line["math_validation"]})
+            header = {**labelled["fields"], **{key: value for key, value in template_result["header"].items() if value is not None}}
+            debug["vendor_template"] = {"id": template_result["template_id"], "validation": template_result["validation"], "line_sum": str(template_result["line_sum"])}
+            debug["mode"] = "marvel_produce_v1"
+            return {"header": header, "lines": template_lines or lines, "debug": debug}
         return {"header": labelled["fields"], "lines": lines, "debug": debug}

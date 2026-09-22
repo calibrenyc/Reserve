@@ -69,6 +69,18 @@ class InventoryItemBase(BaseModel):
     preferred_vendor_id: Optional[str] = None
     is_key_item: bool = False
     is_active: bool = True
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    count_uom: Optional[str] = None
+    recipe_uom: Optional[str] = None
+    pack_size: Optional[str] = None
+    case_size: Optional[str] = None
+    conversion_factor: Optional[Decimal] = None
+    par_level: Optional[Decimal] = None
+    needs_review: bool = False
+    created_from_import: bool = False
+    source_import_id: Optional[str] = None
+    notes: Optional[str] = None
 
 class InventoryItemCreate(InventoryItemBase):
     conversions: Optional[List[UnitConversionBase]] = []
@@ -202,4 +214,3 @@ class DepositUpdate(BaseModel):
     actual_cash: Optional[Decimal] = None
     deposit_amount: Optional[Decimal] = None
     notes: Optional[str] = None
-

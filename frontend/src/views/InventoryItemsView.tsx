@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Plus, TrendingUp, History } from 'lucide-react';
+import { Package, Plus, TrendingUp, History, Trash2, RotateCcw } from 'lucide-react';
 import { InventoryItem } from '../types';
 
 export const InventoryItemsView: React.FC = () => {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [selectedCostHistory, setSelectedCostHistory] = useState<any>(null);
+  const [pendingArchive, setPendingArchive] = useState<InventoryItem | null>(null);
+  const [search, setSearch] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
 
   // Form State
   const [name, setName] = useState('');
@@ -14,9 +17,15 @@ export const InventoryItemsView: React.FC = () => {
   const [currentCost, setCurrentCost] = useState('2.00');
 
   const fetchItems = () => {
-    fetch('/api/items')
+    fetch(`/api/items${showArchived ? '?include_archived=true' : ''}`)
       .then(res => res.json())
-      .then(data => setItems(Array.isArray(data) ? data : []))
+      .then(data => setItems(Array.isArray(data) ? data.map((item: InventoryItem) => ({
+        ...item,
+        current_cost: Number(item.current_cost) || 0,
+        previous_cost: Number(item.previous_cost) || 0,
+        average_cost: Number(item.average_cost) || 0,
+        last_purchase_cost: Number(item.last_purchase_cost) || 0
+      })) : []))
       .catch(err => {
         console.error(err);
         setItems([]);
@@ -25,7 +34,7 @@ export const InventoryItemsView: React.FC = () => {
 
   useEffect(() => {
     fetchItems();
-  }, []);
+  }, [showArchived]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,12 +63,23 @@ export const InventoryItemsView: React.FC = () => {
     setSelectedCostHistory(data);
   };
 
+  const archiveItem = async (item: InventoryItem) => {
+    const action = item.is_active ? 'archive' : 'restore';
+    const response = item.is_active
+      ? await fetch(`/api/items/${item.id}/archive`, { method: 'POST' })
+      : await fetch(`/api/items/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: true }) });
+    if (!response.ok) { setPendingArchive(null); return; }
+    setPendingArchive(null);
+    fetchItems();
+  };
+
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-zinc-100">Inventory Items & Price History</h2>
-        <p className="text-zinc-400 text-sm">Internal ingredient item master, unit conversions, and purchase price history</p>
+        <h2 className="text-2xl font-bold text-zinc-100">Items</h2>
+        <p className="text-zinc-400 text-sm">The central item master for counts, invoices, vendors, recipes, transfers, waste, purchasing, and reporting.</p>
       </div>
+      <div className="flex gap-3"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search items or categories" className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm"/><label className="text-sm text-zinc-400 flex items-center gap-2"><input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)}/> Show archived</label></div>
 
       {/* Add Item Form */}
       <form onSubmit={handleCreate} className="bg-zinc-900 border border-zinc-700 p-4 rounded-xl flex items-center gap-3">
@@ -114,6 +134,7 @@ export const InventoryItemsView: React.FC = () => {
             <tr>
               <th className="p-4">Item Name</th>
               <th className="p-4">Category</th>
+              <th className="p-4">Storage</th>
               <th className="p-4">Base UOM</th>
               <th className="p-4">Current Cost</th>
               <th className="p-4">Previous Cost</th>
@@ -121,13 +142,14 @@ export const InventoryItemsView: React.FC = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800">
-            {(items || []).map(item => (
+            {(items || []).filter(item => item.name.toLowerCase().includes(search.toLowerCase()) || item.category.toLowerCase().includes(search.toLowerCase())).map(item => (
               <tr key={item.id} className="hover:bg-zinc-800/60 transition-colors">
                 <td className="p-4 font-semibold text-zinc-100 flex items-center space-x-2">
                   <Package className="w-4 h-4 text-emerald-400" />
                   <span>{item.name}</span>
                 </td>
                 <td className="p-4 text-zinc-400">{item.category}</td>
+                <td className="p-4 text-zinc-400">{item.storage_location}</td>
                 <td className="p-4 text-zinc-300 font-mono text-xs">{item.base_uom}</td>
                 <td className="p-4 font-bold text-emerald-400">${item.current_cost.toFixed(2)}</td>
                 <td className="p-4 text-zinc-400">${item.previous_cost.toFixed(2)}</td>
@@ -139,12 +161,33 @@ export const InventoryItemsView: React.FC = () => {
                     <History className="w-3.5 h-3.5 text-emerald-400" />
                     <span>Price History</span>
                   </button>
+                  <button
+                    onClick={() => setPendingArchive(item)}
+                    title={item.is_active ? 'Archive item' : 'Restore item'}
+                    aria-label={item.is_active ? `Archive ${item.name}` : `Restore ${item.name}`}
+                    className={item.is_active ? 'ml-2 inline-grid h-8 w-8 place-items-center rounded-md text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 transition-colors' : 'ml-2 inline-grid h-8 w-8 place-items-center rounded-md text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300 transition-colors'}
+                  >
+                    {item.is_active ? <Trash2 className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {pendingArchive && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="archive-item-title">
+          <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-6 shadow-2xl">
+            <h3 id="archive-item-title" className="text-lg font-bold text-zinc-100">{pendingArchive.is_active ? 'Archive item?' : 'Restore item?'}</h3>
+            <p className="mt-2 text-sm text-zinc-400">{pendingArchive.is_active ? <>“{pendingArchive.name}” will be removed from active item lists. Historical counts, invoices, recipes, and cost records are preserved.</> : <>“{pendingArchive.name}” will return to active item lists.</>}</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setPendingArchive(null)} className="rounded-lg px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800">Cancel</button>
+              <button onClick={() => archiveItem(pendingArchive)} className={pendingArchive.is_active ? 'rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500' : 'rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500'}>{pendingArchive.is_active ? 'Archive item' : 'Restore item'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Cost History Modal */}
       {selectedCostHistory && (

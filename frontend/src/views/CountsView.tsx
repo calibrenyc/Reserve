@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Boxes, Plus, FileSpreadsheet, Minus, Plus as PlusIcon } from 'lucide-react';
 import { InventoryItem } from '../types';
+import { apiFetch } from '../api';
 
 interface CountsViewProps { onNewCount?: (templateId?: string) => void; onEditCount?: (countId: string) => void; entryMode?: boolean; editCountId?: string | null; templateId?: string | null; onCloseEntry?: () => void; }
 interface CountTemplate { id: string; name: string; line_count: number; }
@@ -128,11 +129,14 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
     setImporting(true);
     try {
       const form = new FormData(); form.append('file', file);
-      const response = await fetch('/api/inventory/count-sheet-template/import', { method: 'POST', body: form });
-      const result = await response.json();
+      const response = await apiFetch('/api/inventory/count-sheet-template/import', { method: 'POST', body: form });
+      const text = await response.text();
+      let result: any;
+      try { result = JSON.parse(text); }
+      catch { throw new Error(response.ok ? 'The server returned an unreadable import result. Please refresh and try again.' : `Import failed (${response.status}).`); }
       if (!response.ok) throw new Error(result.detail || 'Import failed');
       alert(`Count sheet imported: ${result.created} new items, ${result.updated} updated. ${result.areas.length} areas are ready to count.`);
-      const itemsResponse = await fetch('/api/items');
+      const itemsResponse = await apiFetch('/api/items');
       setItems(await itemsResponse.json());
       fetchTemplates();
     } catch (error) {

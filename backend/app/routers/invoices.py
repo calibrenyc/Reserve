@@ -35,7 +35,7 @@ def list_invoices(status_filter: Optional[str] = None, db: Session = Depends(get
     return [api_invoice(inv) for inv in query.order_by(Invoice.created_at.desc()).all()]
 
 @router.post("/upload", response_model=InvoiceResponse)
-async def upload_invoice(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_invoice(file: UploadFile = File(...), ocr_template: str = Form("auto"), db: Session = Depends(get_db)):
     file_id = str(uuid.uuid4())
     ext = os.path.splitext(file.filename)[1].lower()
     filename = f"{file_id}{ext}"
@@ -46,15 +46,23 @@ async def upload_invoice(file: UploadFile = File(...), db: Session = Depends(get
         f.write(contents)
 
     # OCR supplies evidence only; layout/parser/validator are independent stages.
-    result = InvoiceImportPipeline().run(LocalOCRProvider().process_document(file_path))
+    result = InvoiceImportPipeline(ocr_template).run(LocalOCRProvider().process_document(file_path))
     # Baseline mode intentionally does not interpret OCR into vendor/header fields.
-    header, vendor = result["header"], None
+    header = result["header"]
+    vendor = None
+    if header.get("vendor_name"):
+        vendor = db.query(Vendor).filter(Vendor.name.ilike(header["vendor_name"])).first()
+        if not vendor:
+            vendor = Vendor(name=header["vendor_name"])
+            db.add(vendor)
+            db.flush()
 
     invoice = Invoice(
         id=file_id,
         invoice_number=header.get("invoice_number"),
         vendor_id=vendor.id if vendor else None,
-        vendor_name_raw=None, invoice_date=None,
+        vendor_name_raw=header.get("vendor_name"), invoice_date=datetime.date.fromisoformat(header["invoice_date"]) if header.get("invoice_date") else None,
+        po_number=header.get("po_number"),
         subtotal=header.get("subtotal") or Decimal("0"), tax=header.get("tax") or Decimal("0"), delivery_fees=header.get("freight") or Decimal("0"), total_amount=header.get("grand_total") or Decimal("0"),
         vendor_confidence=0.0, invoice_number_confidence=95.0 if header.get("invoice_number") else 0.0, total_confidence=95.0 if header.get("grand_total") else 0.0,
         status="Needs Review",
@@ -71,11 +79,14 @@ async def upload_invoice(file: UploadFile = File(...), db: Session = Depends(get
             line_number=line["line_number"],
             vendor_sku=line["vendor_sku"],
             description=line["description"] or "(missing description)",
-            quantity=line["quantity"],
+            # Older local databases may retain NOT NULL constraints for these
+            # values. Preserve an incomplete OCR row for review rather than
+            # aborting the entire invoice import when a field was not read.
+            quantity=line["quantity"] if line["quantity"] is not None else Decimal("0"),
             unit_of_measure=line["unit_of_measure"],
             pack_size=line["pack_size"],
-            unit_cost=line["unit_cost"],
-            extended_cost=line["extended_cost"],
+            unit_cost=line["unit_cost"] if line["unit_cost"] is not None else Decimal("0"),
+            extended_cost=line["extended_cost"] if line["extended_cost"] is not None else Decimal("0"),
             confidence=min((v for v in line["field_confidence"].values() if v is not None), default=0),
             field_confidence=json.dumps(line["field_confidence"]),
             validation_status=line["validation_status"],
@@ -295,7 +306,7 @@ def unlock_invoice(invoice_id: str, db: Session = Depends(get_db)):
     return api_invoice(inv)
 
 @router.post("/{invoice_id}/reparse", response_model=InvoiceResponse)
-def reparse_invoice(invoice_id: str, db: Session = Depends(get_db)):
+def reparse_invoice(invoice_id: str, ocr_template: str = "auto", db: Session = Depends(get_db)):
     inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found.")
@@ -305,13 +316,14 @@ def reparse_invoice(invoice_id: str, db: Session = Depends(get_db)):
 
     # Reparse uses the same transparent spatial baseline as a new upload. It
     # intentionally does not populate header totals or invent corrected values.
-    result = InvoiceImportPipeline().run(LocalOCRProvider().process_document(inv.file_path))
+    result = InvoiceImportPipeline(ocr_template).run(LocalOCRProvider().process_document(inv.file_path))
     header = result["header"]
     inv.raw_ocr_text = result["debug"]["raw_ocr"]
     inv.pipeline_debug = json.dumps(result["debug"], default=str)
-    inv.vendor_name_raw = None
+    inv.vendor_name_raw = header.get("vendor_name")
     inv.invoice_number = header.get("invoice_number")
-    inv.invoice_date = None
+    inv.invoice_date = datetime.date.fromisoformat(header["invoice_date"]) if header.get("invoice_date") else None
+    inv.po_number = header.get("po_number")
     inv.subtotal = header.get("subtotal") or Decimal("0")
     inv.tax = header.get("tax") or Decimal("0")
     inv.delivery_fees = header.get("freight") or Decimal("0")
@@ -324,11 +336,11 @@ def reparse_invoice(invoice_id: str, db: Session = Depends(get_db)):
             line_number=line["line_number"],
             vendor_sku=None,
             description=line["description"] or "(missing description)",
-            quantity=line["quantity"],
+            quantity=line["quantity"] if line["quantity"] is not None else Decimal("0"),
             unit_of_measure=line["unit_of_measure"],
             pack_size=None,
-            unit_cost=line["unit_cost"],
-            extended_cost=line["extended_cost"],
+            unit_cost=line["unit_cost"] if line["unit_cost"] is not None else Decimal("0"),
+            extended_cost=line["extended_cost"] if line["extended_cost"] is not None else Decimal("0"),
             confidence=0,
             field_confidence=json.dumps(line["field_confidence"]),
             validation_status=line["validation_status"],
@@ -411,5 +423,3 @@ def delete_invoice(invoice_id: str, db: Session = Depends(get_db)):
     db.commit()
 
     return {"status": "success", "message": f"Invoice {invoice_id} deleted successfully.", "id": invoice_id}
-
-

@@ -10,6 +10,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ onReviewInvoice }) =
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [pendingUpload, setPendingUpload] = useState<File | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Invoice | null>(null);
 
   const fetchInvoices = () => {
     fetch('/api/invoices')
@@ -29,14 +31,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ onReviewInvoice }) =
     fetchInvoices();
   }, []);
 
-  const handleDeleteInvoice = async (id: string, vendorName?: string, invNumber?: string) => {
-    const label = `${vendorName || 'Vendor'} ${invNumber ? `#${invNumber}` : ''}`.trim();
-    if (!window.confirm(`Are you sure you want to delete invoice ${label}? This cannot be undone.`)) {
-      return;
-    }
+  const handleDeleteInvoice = async () => {
+    if (!pendingDelete) return;
     try {
-      const res = await fetch(`/api/invoices/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/invoices/${pendingDelete.id}`, { method: 'DELETE' });
       if (res.ok) {
+        setPendingDelete(null);
         fetchInvoices();
       } else {
         alert('Failed to delete invoice.');
@@ -47,10 +47,11 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ onReviewInvoice }) =
     }
   };
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (file: File, ocrTemplate = 'auto') => {
     setUploading(true);
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('ocr_template', ocrTemplate);
 
     try {
       const res = await fetch('/api/invoices/upload', {
@@ -63,9 +64,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ onReviewInvoice }) =
         if (createdInvoice && createdInvoice.id) {
           onReviewInvoice(createdInvoice.id);
         }
+      } else {
+        const detail = await res.json().catch(() => null);
+        alert(detail?.detail || 'Invoice processing failed. Please try again.');
       }
     } catch (e) {
       console.error(e);
+      alert('Invoice processing failed. Please check that the local server is running.');
     } finally {
       setUploading(false);
     }
@@ -81,18 +86,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ onReviewInvoice }) =
           <p className="text-zinc-400 text-sm">Upload vendor invoice files, run local OCR, and review line mappings</p>
         </div>
 
-        {/* File Upload Button */}
-        <label className="cursor-pointer px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm rounded-xl flex items-center space-x-2 shadow-lg shadow-emerald-950/40 transition-colors">
-          <Upload className="w-4 h-4" />
-          <span>{uploading ? 'Processing Local OCR...' : 'Upload Invoice File'}</span>
-          <input
-            type="file"
-            accept=".pdf,.png,.jpg,.jpeg"
-            onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
-            className="hidden"
-            disabled={uploading}
-          />
-        </label>
+        <div className="flex items-center gap-3">
+          <label className="cursor-pointer px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm rounded-xl flex items-center space-x-2 shadow-lg shadow-emerald-950/40 transition-colors">
+            <Upload className="w-4 h-4" />
+            <span>{uploading ? 'Processing Local OCR...' : 'Upload Invoice File'}</span>
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e => { const file = e.target.files?.[0]; if (file) setPendingUpload(file); e.currentTarget.value = ''; }} className="hidden" disabled={uploading} />
+          </label>
+        </div>
       </div>
 
       {/* Invoices List Table */}
@@ -150,7 +150,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ onReviewInvoice }) =
                         <span>Review OCR & Lines</span>
                       </button>
                       <button
-                        onClick={() => handleDeleteInvoice(inv.id, inv.vendor_name_raw, inv.invoice_number)}
+                        onClick={() => setPendingDelete(inv)}
                         className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/30 rounded-lg text-xs transition-colors cursor-pointer"
                         title="Delete Invoice"
                       >
@@ -164,6 +164,32 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({ onReviewInvoice }) =
           </tbody>
         </table>
       </div>
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-invoice-title">
+          <div className="w-full max-w-md rounded-xl border border-rose-500/40 bg-zinc-900 p-6 shadow-2xl">
+            <h3 id="delete-invoice-title" className="text-lg font-bold text-zinc-100">Delete invoice?</h3>
+            <p className="mt-2 text-sm text-zinc-400">This permanently removes {pendingDelete.vendor_name_raw || 'this invoice'}{pendingDelete.invoice_number ? ` #${pendingDelete.invoice_number}` : ''} and its line items.</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setPendingDelete(null)} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-800">Cancel</button>
+              <button onClick={handleDeleteInvoice} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500">Delete invoice</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="invoice-template-title">
+          <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-6 shadow-2xl">
+            <h3 id="invoice-template-title" className="text-lg font-bold text-zinc-100">Invoice template</h3>
+            <p className="mt-2 text-sm text-zinc-300">Is <span className="font-semibold text-zinc-100">{pendingUpload.name}</span> a Marvel Produce invoice?</p>
+            <p className="mt-1 text-xs text-zinc-500">Choose Yes to run the Marvel Produce template. You can add more vendor templates here as they are created.</p>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button onClick={() => setPendingUpload(null)} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-800">Cancel</button>
+              <button onClick={() => { const file = pendingUpload; setPendingUpload(null); handleFileUpload(file, 'auto'); }} className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-semibold text-zinc-100 hover:bg-zinc-800">No, auto-detect</button>
+              <button onClick={() => { const file = pendingUpload; setPendingUpload(null); handleFileUpload(file, 'marvel_produce_v1'); }} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Yes, Marvel Produce</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

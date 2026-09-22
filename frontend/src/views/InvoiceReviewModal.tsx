@@ -21,6 +21,7 @@ export const InvoiceReviewModal: React.FC<InvoiceReviewModalProps> = ({ invoiceI
   const [unlocking, setUnlocking] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [debug, setDebug] = useState<any>(null);
   const [selectedRowDebugId, setSelectedRowDebugId] = useState<string | null>(null);
 
@@ -294,9 +295,6 @@ export const InvoiceReviewModal: React.FC<InvoiceReviewModalProps> = ({ invoiceI
 
   const handleDelete = async () => {
     if (!invoice) return;
-    if (!window.confirm(`Are you sure you want to delete this invoice (${invoice.vendor_name_raw || 'Vendor'})? This action cannot be undone.`)) {
-      return;
-    }
     setDeleting(true);
     try {
       const res = await fetch(`/api/invoices/${invoice.id}`, { method: 'DELETE' });
@@ -444,7 +442,7 @@ export const InvoiceReviewModal: React.FC<InvoiceReviewModalProps> = ({ invoiceI
                   <span>{reparsing ? 'Running OCR…' : 'Re-run OCR'}</span>
                 </button>
                 <button
-                  onClick={handleDelete}
+                  onClick={() => setShowDeleteConfirm(true)}
                   disabled={deleting}
                   className="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-semibold text-xs sm:text-sm rounded-lg flex items-center space-x-2 transition-colors border border-rose-500/30 cursor-pointer"
                   title="Delete this invoice"
@@ -755,6 +753,18 @@ export const InvoiceReviewModal: React.FC<InvoiceReviewModalProps> = ({ invoiceI
           </div>
         </div>
       </div>
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-review-title">
+          <div className="w-full max-w-md rounded-xl border border-rose-500/40 bg-zinc-900 p-6 shadow-2xl">
+            <h3 id="delete-review-title" className="text-lg font-bold text-zinc-100">Delete invoice?</h3>
+            <p className="mt-2 text-sm text-zinc-400">This permanently removes {invoice?.vendor_name_raw || 'this invoice'} and all of its line items.</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setShowDeleteConfirm(false)} disabled={deleting} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-800 disabled:opacity-50">Cancel</button>
+              <button onClick={handleDelete} disabled={deleting} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500 disabled:opacity-50">{deleting ? 'Deleting…' : 'Delete invoice'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

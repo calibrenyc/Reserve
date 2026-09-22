@@ -14,16 +14,19 @@ import {
   History,
   CalendarDays,
   ArrowLeftRight,
-  FolderOpen
+  FolderOpen, ShieldCheck, Rocket
 } from 'lucide-react';
 import reserveLogo from '../assets/reserve-logo.png';
 
 interface SidebarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
+  canAdmin?: boolean;
+  canManageItems?: boolean;
+  canBusinessStart?: boolean;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, canAdmin = false, canManageItems = false, canBusinessStart = false }) => {
   const navGroups = [
     {
       title: 'OVERVIEW',
@@ -38,7 +41,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
         { id: 'invoices', label: 'Invoices', icon: FileText },
         { id: 'documents', label: 'Documents', icon: FolderOpen },
         { id: 'vendors', label: 'Vendors', icon: Building2 },
-        { id: 'items', label: 'Items & Prices', icon: Package }
+        ...(canManageItems ? [{ id: 'items', label: 'Items', icon: Package }] : [])
       ]
     },
     {
@@ -69,7 +72,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
         { id: 'backups', label: 'Backups & Recovery', icon: Database },
         { id: 'audit', label: 'Audit Trail', icon: History }
       ]
-    }
+    },
+    ...(canAdmin ? [{
+      title: 'ADMIN',
+      items: [
+        ...(canBusinessStart ? [{ id: 'business-start', label: 'Business Start', icon: Rocket }] : []),
+        { id: 'admin', label: 'Administration', icon: ShieldCheck }
+      ]
+    }] : [])
   ];
 
   return (

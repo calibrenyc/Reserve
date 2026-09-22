@@ -13,10 +13,65 @@ class Location(Base):
     __tablename__ = "locations"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
     name = Column(String, nullable=False)
     code = Column(String, nullable=True)
+    address_line1 = Column(String, nullable=True)
+    address_line2 = Column(String, nullable=True)
+    city = Column(String, nullable=True)
+    state = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    timezone = Column(String, default="America/New_York")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    organization = relationship("Organization", back_populates="locations")
+    user_assignments = relationship("UserLocation", back_populates="location", cascade="all, delete-orphan")
+
+class Organization(Base):
+    __tablename__ = "organizations"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    name = Column(String, nullable=False, unique=True)
+    # The control plane keeps this routing key; a licensed organization has an
+    # isolated operational SQLite database at data/organizations/<key>.db.
+    database_key = Column(String, nullable=True, unique=True, index=True)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    locations = relationship("Location", back_populates="organization")
+    users = relationship("User", back_populates="organization")
+
+class Role(Base):
+    __tablename__ = "roles"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    is_system = Column(Boolean, default=False)
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    role_id = Column(String, ForeignKey("roles.id"), nullable=False, index=True)
+    permission = Column(String, nullable=False, index=True)
+    allowed = Column(Boolean, default=True)
+
+class UserLocation(Base):
+    __tablename__ = "user_locations"
+    user_id = Column(String, ForeignKey("users.id"), primary_key=True)
+    location_id = Column(String, ForeignKey("locations.id"), primary_key=True)
+    user = relationship("User", back_populates="location_assignments")
+    location = relationship("Location", back_populates="user_assignments")
+
+class UserPermissionOverride(Base):
+    __tablename__ = "user_permission_overrides"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    permission = Column(String, nullable=False, index=True)
+    # True = custom allow, False = custom deny; absence means inherited.
+    allowed = Column(Boolean, nullable=False)
 
 class User(Base):
     __tablename__ = "users"
@@ -25,13 +80,24 @@ class User(Base):
     username = Column(String, unique=True, nullable=False)
     full_name = Column(String, nullable=False)
     role = Column(String, default="manager")
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    email = Column(String, unique=True, nullable=True, index=True)
+    password_hash = Column(String, nullable=True)
+    last_login_at = Column(DateTime, nullable=True)
+    is_platform_owner = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    organization = relationship("Organization", back_populates="users")
+    location_assignments = relationship("UserLocation", back_populates="user", cascade="all, delete-orphan")
 
 class Vendor(Base):
     __tablename__ = "vendors"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
     name = Column(String, nullable=False, unique=True)
     account_number = Column(String, nullable=True)
     contact_email = Column(String, nullable=True)
@@ -63,6 +129,7 @@ class InventoryItem(Base):
     __tablename__ = "inventory_items"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
     name = Column(String, nullable=False, unique=True)
     sku = Column(String, nullable=True, unique=True)
     category = Column(String, nullable=False, default="Food")  # Food, Produce, Meat, Dairy, Dry Goods, Beverage, Packaging, Cleaning, Supplies
@@ -78,6 +145,23 @@ class InventoryItem(Base):
     preferred_vendor_id = Column(String, ForeignKey("vendors.id"), nullable=True)
     is_key_item = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    # Item master additions.  Existing operational foreign keys intentionally
+    # continue to point here; this is the single product catalog.
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
+    display_name = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    storage_area_id = Column(String, ForeignKey("storage_areas.id"), nullable=True)
+    count_uom = Column(String, nullable=True)
+    recipe_uom = Column(String, nullable=True)
+    pack_size = Column(String, nullable=True)
+    case_size = Column(String, nullable=True)
+    conversion_factor = Column(Numeric(12, 4), nullable=True)
+    par_level = Column(Numeric(12, 4), nullable=True)
+    needs_review = Column(Boolean, default=False)
+    created_from_import = Column(Boolean, default=False)
+    source_import_id = Column(String, ForeignKey("item_imports.id"), nullable=True)
+    notes = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     vendor_items = relationship("VendorItem", back_populates="mapped_inventory_item")
@@ -87,9 +171,40 @@ class InventoryItem(Base):
     waste_logs = relationship("WasteLog", back_populates="inventory_item")
     recipe_ingredients = relationship("RecipeIngredient", back_populates="inventory_item")
 
+class ItemCategory(Base):
+    __tablename__ = "item_categories"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    name = Column(String, nullable=False)
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+
+class StorageArea(Base):
+    __tablename__ = "storage_areas"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
+    name = Column(String, nullable=False)
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+
+class ItemImport(Base):
+    __tablename__ = "item_imports"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
+    filename = Column(String, nullable=False)
+    source_type = Column(String, nullable=False)
+    mapping_json = Column(Text, nullable=True)
+    rows_json = Column(Text, nullable=False)
+    status = Column(String, default="Preview")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 class InventoryCountTemplate(Base):
     __tablename__ = "inventory_count_templates"
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     name = Column(String, nullable=False, unique=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     lines = relationship("InventoryCountTemplateLine", back_populates="template", cascade="all, delete-orphan")
@@ -119,6 +234,8 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     invoice_number = Column(String, nullable=True)
     vendor_id = Column(String, ForeignKey("vendors.id"), nullable=True)
     vendor_name_raw = Column(String, nullable=True)
@@ -158,6 +275,8 @@ class InvoiceLine(Base):
     __tablename__ = "invoice_lines"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     invoice_id = Column(String, ForeignKey("invoices.id"), nullable=False)
     line_number = Column(Integer, default=1)
     debug_id = Column(String, nullable=True)
@@ -182,6 +301,8 @@ class InventoryCount(Base):
     __tablename__ = "inventory_counts"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     name = Column(String, nullable=False, default="Daily/Weekly Count")
     count_date = Column(DateTime, default=datetime.datetime.utcnow)
     employee_name = Column(String, nullable=True)
@@ -214,6 +335,8 @@ class InventoryTransaction(Base):
     __tablename__ = "inventory_transactions"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
     transaction_type = Column(String, nullable=False)  # Purchase, Inventory Count, Transfer In, Transfer Out, Waste, Adjustment, Donation, Return, Credit
@@ -233,6 +356,8 @@ class WasteLog(Base):
     __tablename__ = "waste_logs"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
     quantity = Column(Numeric(12, 4), nullable=False)
@@ -250,6 +375,7 @@ class Recipe(Base):
     __tablename__ = "recipes"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
     name = Column(String, nullable=False, unique=True)
     pos_identifier = Column(String, nullable=True)
     category = Column(String, default="Entree")
@@ -276,6 +402,8 @@ class SalesImport(Base):
     __tablename__ = "sales_imports"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     import_date = Column(DateTime, default=datetime.datetime.utcnow)
     filename = Column(String, nullable=False)
     file_hash = Column(String, nullable=False, unique=True)  # Prevents duplicate import
@@ -304,6 +432,8 @@ class Deposit(Base):
     __tablename__ = "deposits"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     business_date = Column(Date, nullable=False)
     deposit_date = Column(Date, nullable=False)
     expected_cash = Column(Numeric(12, 2), default=0.0)
@@ -339,6 +469,9 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     user = Column(String, default="System/Manager")
     action = Column(String, nullable=False)
@@ -358,4 +491,3 @@ class VendorOcrRule(Base):
     sample_text = Column(Text, nullable=True)
 
     vendor = relationship("Vendor")
-
