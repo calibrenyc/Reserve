@@ -87,6 +87,23 @@ class InventoryItem(Base):
     waste_logs = relationship("WasteLog", back_populates="inventory_item")
     recipe_ingredients = relationship("RecipeIngredient", back_populates="inventory_item")
 
+class InventoryCountTemplate(Base):
+    __tablename__ = "inventory_count_templates"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    name = Column(String, nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    lines = relationship("InventoryCountTemplateLine", back_populates="template", cascade="all, delete-orphan")
+
+class InventoryCountTemplateLine(Base):
+    __tablename__ = "inventory_count_template_lines"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    template_id = Column(String, ForeignKey("inventory_count_templates.id"), nullable=False)
+    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
+    storage_location = Column(String, nullable=False, default="Main Storage")
+    sort_order = Column(Integer, default=0)
+    template = relationship("InventoryCountTemplate", back_populates="lines")
+    inventory_item = relationship("InventoryItem")
+
 class UnitConversion(Base):
     __tablename__ = "unit_conversions"
 
@@ -125,6 +142,9 @@ class Invoice(Base):
 
     file_path = Column(String, nullable=True)
     raw_ocr_text = Column(Text, nullable=True)
+    # Immutable evidence from the import pipeline.  Kept separately from notes so
+    # review decisions never overwrite OCR/layout/validation evidence.
+    pipeline_debug = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -140,16 +160,18 @@ class InvoiceLine(Base):
     id = Column(String, primary_key=True, default=generate_uuid)
     invoice_id = Column(String, ForeignKey("invoices.id"), nullable=False)
     line_number = Column(Integer, default=1)
+    debug_id = Column(String, nullable=True)
     vendor_sku = Column(String, nullable=True)
     description = Column(String, nullable=False)
-    quantity = Column(Numeric(12, 4), nullable=False, default=1.0)
+    quantity = Column(Numeric(12, 4), nullable=True)
     unit_of_measure = Column(String, nullable=True)
     pack_size = Column(String, nullable=True)
-    unit_cost = Column(Numeric(12, 4), nullable=False, default=0.0)
-    extended_cost = Column(Numeric(12, 2), nullable=False, default=0.0)
+    unit_cost = Column(Numeric(12, 4), nullable=True)
+    extended_cost = Column(Numeric(12, 2), nullable=True)
     confidence = Column(Float, default=100.0)
-
-    # Mapping to internal item
+    field_confidence = Column(Text, nullable=True)  # JSON, per extracted field
+    validation_status = Column(String, default="Needs Review")
+    source_boxes = Column(Text, nullable=True)  # JSON field -> OCR bounding box
     mapped_inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
     is_mapped = Column(Boolean, default=False)
 

@@ -11,26 +11,24 @@ PYTHON_EXE = os.path.join(VENV_BIN, "python")
 UVICORN_EXE = os.path.join(VENV_BIN, "uvicorn")
 NPX_EXE = os.path.join(VENV_BIN, "npx")
 
-# Ensure PATH includes virtual environment binaries (node, npm, python) and PYTHONPATH includes PROJECT_ROOT
+# Ensure PYTHONPATH includes PROJECT_ROOT
 env = os.environ.copy()
-env["PATH"] = f"{VENV_BIN}:{env.get('PATH', '')}"
-env["PYTHONPATH"] = f"{PROJECT_ROOT}:{env.get('PYTHONPATH', '')}"
+env["PYTHONPATH"] = f"{PROJECT_ROOT};{env.get('PYTHONPATH', '')}"
 
 def main():
     print("=" * 70)
-    print("🚀 LAUNCHING RESERVE LOCAL-FIRST RESTAURANT BACK-OFFICE PLATFORM")
+    print("LAUNCHING RESERVE LOCAL-FIRST RESTAURANT BACK-OFFICE PLATFORM")
     print("=" * 70)
 
-    # 1. Check & build frontend bundle if missing
+    # 1. Always build so the server never serves a stale UI after an update.
     dist_dir = os.path.join(PROJECT_ROOT, "frontend", "dist")
-    if not os.path.exists(dist_dir):
-        print("\n[1/3] Building production React desktop bundle...")
-        subprocess.run([NPX_EXE, "vite", "build"], cwd=os.path.join(PROJECT_ROOT, "frontend"), env=env, check=True)
+    print("\n[1/3] Building production React desktop bundle...")
+    subprocess.run(["npx", "vite", "build"], cwd=os.path.join(PROJECT_ROOT, "frontend"), env=env, check=True)
 
     # 2. Start Single FastAPI Server (serving both React SPA Desktop UI and REST API on port 8000)
     print("\n[2/3] Starting Local Application Server (http://localhost:8000)...")
     backend_proc = subprocess.Popen(
-        [UVICORN_EXE, "backend.app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+        [sys.executable, "-m", "uvicorn", "backend.app.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"],
         cwd=PROJECT_ROOT,
         env=env
     )
@@ -44,8 +42,8 @@ def main():
     except Exception:
         pass
 
-    print("\n✨ Reserve is active! Accessible in your browser at:")
-    print("   👉 http://localhost:8000")
+    print("\nReserve is active! Accessible in your browser at:")
+    print("   -> http://localhost:8000")
     print("\nPress Ctrl+C to stop local services.\n")
 
     try:

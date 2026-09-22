@@ -85,15 +85,19 @@ class InventoryItemResponse(InventoryItemBase):
 
 # Invoice Schemas
 class InvoiceLineBase(BaseModel):
+    debug_id: Optional[str] = None
     line_number: int = 1
     vendor_sku: Optional[str] = None
     description: str
-    quantity: Decimal = Decimal("1.0")
+    quantity: Optional[Decimal] = None
     unit_of_measure: Optional[str] = None
     pack_size: Optional[str] = None
-    unit_cost: Decimal = Decimal("0.00")
-    extended_cost: Decimal = Decimal("0.00")
+    unit_cost: Optional[Decimal] = None
+    extended_cost: Optional[Decimal] = None
     confidence: float = 100.0
+    field_confidence: Optional[str] = None
+    validation_status: str = "Needs Review"
+    source_boxes: Optional[str] = None
     mapped_inventory_item_id: Optional[str] = None
     is_mapped: bool = False
 
@@ -121,6 +125,9 @@ class InvoiceBase(BaseModel):
     discounts: Decimal = Decimal("0.00")
     total_amount: Decimal = Decimal("0.00")
     notes: Optional[str] = None
+    vendor_confidence: Optional[float] = 100.0
+    invoice_number_confidence: Optional[float] = 100.0
+    total_confidence: Optional[float] = 100.0
 
 class InvoiceUpdate(InvoiceBase):
     status: Optional[str] = None
@@ -133,10 +140,9 @@ class InvoiceResponse(InvoiceBase):
     invoice_number_confidence: float
     total_confidence: float
     file_path: Optional[str]
-    raw_ocr_text: Optional[str]
     created_at: datetime
-    approved_at: Optional[datetime]
-    approved_by: Optional[str]
+    approved_at: Optional[datetime] = None
+    approved_by: Optional[str] = None
     lines: List[InvoiceLineResponse] = []
     class Config:
         from_attributes = True

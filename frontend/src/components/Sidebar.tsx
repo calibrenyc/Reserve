@@ -12,8 +12,11 @@ import {
   BarChart3,
   Database,
   History,
-  TrendingUp
+  CalendarDays,
+  ArrowLeftRight,
+  FolderOpen
 } from 'lucide-react';
+import reserveLogo from '../assets/reserve-logo-black.png';
 
 interface SidebarProps {
   currentTab: string;
@@ -25,13 +28,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
     {
       title: 'OVERVIEW',
       items: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'schedule', label: 'Team Schedule', icon: CalendarDays }
       ]
     },
     {
       title: 'PURCHASING',
       items: [
         { id: 'invoices', label: 'Invoices', icon: FileText },
+        { id: 'documents', label: 'Documents', icon: FolderOpen },
         { id: 'vendors', label: 'Vendors', icon: Building2 },
         { id: 'items', label: 'Items & Prices', icon: Package }
       ]
@@ -40,6 +45,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
       title: 'INVENTORY',
       items: [
         { id: 'counts', label: 'Count Sheets', icon: Boxes },
+        { id: 'transfers', label: 'Transfers', icon: ArrowLeftRight },
         { id: 'waste', label: 'Waste Logs', icon: Trash2 }
       ]
     },
@@ -67,13 +73,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
   ];
 
   return (
-    <aside className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col h-screen select-none">
-      <div className="p-4 border-b border-slate-800 flex items-center space-x-3">
-        <div className="bg-sky-600 text-white p-2 rounded-lg font-black text-xl tracking-wider">R</div>
-        <div>
-          <h1 className="font-bold text-slate-100 text-lg tracking-tight">RESERVE</h1>
-          <p className="text-xs text-sky-400 font-medium">Local-First Back-Office</p>
-        </div>
+    <aside className="w-64 bg-zinc-800 border-r border-zinc-700 flex flex-col h-screen select-none">
+      <div className="p-3 border-b border-zinc-700 bg-black">
+        <img
+          src={reserveLogo}
+          alt="Reserve"
+          className="w-full h-auto max-h-28 object-contain"
+        />
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
@@ -92,11 +98,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
                     onClick={() => setCurrentTab(item.id)}
                     className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                       isActive
-                        ? 'bg-sky-600/20 text-sky-400 border border-sky-500/30'
-                        : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                        ? 'bg-zinc-700 text-white border border-zinc-600'
+                        : 'text-zinc-300 hover:bg-zinc-700 hover:text-white'
                     }`}
                   >
-                    <Icon className={`w-4 h-4 ${isActive ? 'text-sky-400' : 'text-slate-500'}`} />
+                    <Icon className={`w-4 h-4 ${isActive ? 'text-zinc-100' : 'text-zinc-400'}`} />
                     <span>{item.label}</span>
                   </button>
                 );
@@ -106,7 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
         ))}
       </nav>
 
-      <div className="p-4 border-t border-slate-800 bg-slate-950 text-xs text-slate-500">
+      <div className="p-4 border-t border-zinc-700 bg-zinc-800 text-xs text-zinc-400">
         <div className="flex items-center justify-between">
           <span>Engine Status</span>
           <span className="flex items-center text-emerald-400">
@@ -118,4 +124,3 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
     </aside>
   );
 };
-

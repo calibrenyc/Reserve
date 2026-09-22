@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UtensilsCrossed, Plus, DollarSign } from 'lucide-react';
+import { UtensilsCrossed, Plus } from 'lucide-react';
 import { InventoryItem } from '../types';
 
 export const RecipesView: React.FC = () => {
@@ -15,7 +15,7 @@ export const RecipesView: React.FC = () => {
   const fetchRecipes = () => {
     fetch('/api/recipes')
       .then(res => res.json())
-      .then(data => setRecipes(data))
+      .then(data => setRecipes(Array.isArray(data) ? data : []))
       .catch(err => console.error(err));
   };
 
@@ -23,7 +23,8 @@ export const RecipesView: React.FC = () => {
     fetchRecipes();
     fetch('/api/items')
       .then(res => res.json())
-      .then(data => setItems(data));
+      .then(data => setItems(Array.isArray(data) ? data : []))
+      .catch(console.error);
   }, []);
 
   const handleAddIngredient = () => {
@@ -52,12 +53,12 @@ export const RecipesView: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-100">Recipes & Costing</h2>
-          <p className="text-slate-400 text-sm">Build recipe ingredient matrices and track live food cost %</p>
+          <h2 className="text-2xl font-bold text-zinc-100">Recipes & Costing</h2>
+          <p className="text-zinc-400 text-sm">Build recipe ingredient matrices and track live food cost %</p>
         </div>
         <button
           onClick={() => setShowModal(true)}
-          className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm rounded-xl flex items-center space-x-2"
+          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm rounded-xl flex items-center space-x-2 cursor-pointer shadow-lg shadow-emerald-950/40"
         >
           <Plus className="w-4 h-4" />
           <span>New Recipe</span>
@@ -67,28 +68,28 @@ export const RecipesView: React.FC = () => {
       {/* Recipe Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {recipes.map(r => (
-          <div key={r.id} className="bg-slate-800/80 border border-slate-700/60 p-5 rounded-xl space-y-4 shadow-lg">
-            <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
+          <div key={r.id} className="bg-zinc-900 border border-zinc-700 p-5 rounded-xl space-y-4 shadow-xl">
+            <div className="flex items-center justify-between border-b border-zinc-700 pb-3">
               <div>
-                <h3 className="font-bold text-slate-100 text-lg flex items-center gap-2">
-                  <UtensilsCrossed className="w-5 h-5 text-sky-400" />
+                <h3 className="font-bold text-zinc-100 text-lg flex items-center gap-2">
+                  <UtensilsCrossed className="w-5 h-5 text-emerald-400" />
                   {r.name}
                 </h3>
-                <p className="text-xs text-slate-400">Category: {r.category}</p>
+                <p className="text-xs text-zinc-400">Category: {r.category}</p>
               </div>
               <div className="text-right">
-                <p className="text-xs text-slate-400">Menu Price</p>
-                <p className="text-lg font-extrabold text-emerald-400">${r.menu_price.toFixed(2)}</p>
+                <p className="text-xs text-zinc-400">Menu Price</p>
+                <p className="text-lg font-extrabold text-emerald-400">${Number(r.menu_price || 0).toFixed(2)}</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 bg-slate-900/60 p-3 rounded-lg text-xs">
+            <div className="grid grid-cols-2 gap-2 bg-zinc-950 p-3 rounded-lg text-xs border border-zinc-800">
               <div>
-                <p className="text-slate-400">Recipe Cost</p>
-                <p className="font-bold text-slate-200">${r.recipe_cost.toFixed(2)}</p>
+                <p className="text-zinc-400">Recipe Cost</p>
+                <p className="font-bold text-zinc-200">${Number(r.recipe_cost || 0).toFixed(2)}</p>
               </div>
               <div>
-                <p className="text-slate-400">Food Cost %</p>
+                <p className="text-zinc-400">Food Cost %</p>
                 <p className={`font-bold ${r.food_cost_pct > 32 ? 'text-amber-400' : 'text-emerald-400'}`}>
                   {r.food_cost_pct}%
                 </p>
@@ -96,11 +97,11 @@ export const RecipesView: React.FC = () => {
             </div>
 
             <div className="space-y-1.5 pt-2">
-              <p className="text-xs font-bold uppercase text-slate-400">Ingredients ({r.ingredients.length})</p>
+              <p className="text-xs font-bold uppercase text-zinc-400">Ingredients ({r.ingredients.length})</p>
               {r.ingredients.map((ing: any) => (
-                <div key={ing.id} className="flex justify-between text-xs text-slate-300">
+                <div key={ing.id} className="flex justify-between text-xs text-zinc-300">
                   <span>{ing.item_name}</span>
-                  <span className="font-mono text-slate-400">{ing.quantity} {ing.uom} (${ing.extended_cost.toFixed(2)})</span>
+                  <span className="font-mono text-zinc-400">{ing.quantity} {ing.uom} (${Number(ing.extended_cost || 0).toFixed(2)})</span>
                 </div>
               ))}
             </div>
@@ -110,16 +111,16 @@ export const RecipesView: React.FC = () => {
 
       {/* New Recipe Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-5 space-y-4">
-            <h3 className="font-bold text-slate-100 text-lg">Create New Recipe</h3>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-xl max-w-lg w-full p-5 space-y-4 shadow-2xl">
+            <h3 className="font-bold text-zinc-100 text-lg">Create New Recipe</h3>
             <div className="space-y-3">
               <input
                 type="text"
                 placeholder="Recipe Name (e.g. Chicken Bowl)"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3.5 py-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none"
               />
               <input
                 type="number"
@@ -127,13 +128,13 @@ export const RecipesView: React.FC = () => {
                 placeholder="Menu Price ($)"
                 value={menuPrice}
                 onChange={e => setMenuPrice(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-emerald-400 font-bold"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3.5 py-2.5 text-sm text-emerald-400 font-bold focus:border-emerald-500 focus:outline-none"
               />
 
               <div className="pt-2">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold uppercase text-slate-400">Ingredients</span>
-                  <button onClick={handleAddIngredient} className="text-xs text-sky-400 hover:underline">+ Add Ingredient</button>
+                  <span className="text-xs font-bold uppercase text-zinc-400">Ingredients</span>
+                  <button onClick={handleAddIngredient} className="text-xs text-emerald-400 hover:underline cursor-pointer">+ Add Ingredient</button>
                 </div>
                 <div className="space-y-2">
                   {ingredients.map((ing, idx) => (
@@ -145,7 +146,7 @@ export const RecipesView: React.FC = () => {
                           updated[idx].inventory_item_id = e.target.value;
                           setIngredients(updated);
                         }}
-                        className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100 flex-1"
+                        className="bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 flex-1 focus:border-emerald-500 focus:outline-none"
                       >
                         {items.map(i => (
                           <option key={i.id} value={i.id}>{i.name}</option>
@@ -160,16 +161,16 @@ export const RecipesView: React.FC = () => {
                           updated[idx].quantity = parseFloat(e.target.value) || 0;
                           setIngredients(updated);
                         }}
-                        className="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-100 text-right"
+                        className="w-20 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-100 text-right focus:border-emerald-500 focus:outline-none"
                       />
                     </div>
                   ))}
                 </div>
               </div>
             </div>
-            <div className="flex justify-end space-x-3 pt-3 border-t border-slate-800">
-              <button onClick={() => setShowModal(false)} className="px-4 py-2 text-slate-400 hover:text-slate-100 text-sm">Cancel</button>
-              <button onClick={handleSaveRecipe} className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm rounded-lg">Save Recipe</button>
+            <div className="flex justify-end space-x-3 pt-3 border-t border-zinc-800">
+              <button onClick={() => setShowModal(false)} className="px-4 py-2 text-zinc-400 hover:text-zinc-100 text-sm cursor-pointer">Cancel</button>
+              <button onClick={handleSaveRecipe} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm rounded-lg cursor-pointer">Save Recipe</button>
             </div>
           </div>
         </div>
@@ -177,4 +178,3 @@ export const RecipesView: React.FC = () => {
     </div>
   );
 };
-

@@ -30,18 +30,22 @@ export interface InventoryItem {
 }
 
 export interface InvoiceLine {
+  debug_id?: string;
   id?: string;
   line_number: number;
   vendor_sku?: string;
   description: string;
-  quantity: number;
+  quantity?: number | null;
   unit_of_measure?: string;
   pack_size?: string;
-  unit_cost: number;
-  extended_cost: number;
+  unit_cost?: number | null;
+  extended_cost?: number | null;
   confidence: number;
+  field_confidence?: string;
+  validation_status?: string;
+  source_boxes?: string;
   mapped_inventory_item_id?: string;
-  is_mapped: boolean;
+  is_mapped?: boolean;
 }
 
 export interface Invoice {
@@ -65,6 +69,7 @@ export interface Invoice {
   total_confidence: number;
   file_path?: string;
   raw_ocr_text?: string;
+  pipeline_debug?: string;
   notes?: string;
   created_at: string;
   approved_at?: string;

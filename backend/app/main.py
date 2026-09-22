@@ -13,6 +13,21 @@ from backend.app.routers import (
 # Create database tables safely with checkfirst=True
 Base.metadata.create_all(bind=engine, checkfirst=True)
 
+# SQLite's create_all does not add fields to installations created by earlier
+# releases. These additive migrations preserve existing invoice records.
+from sqlalchemy import text
+with engine.begin() as connection:
+    for table, column, definition in [
+        ("invoices", "pipeline_debug", "TEXT"),
+        ("invoice_lines", "field_confidence", "TEXT"),
+        ("invoice_lines", "validation_status", "VARCHAR DEFAULT 'Needs Review'"),
+        ("invoice_lines", "source_boxes", "TEXT"),
+        ("invoice_lines", "debug_id", "VARCHAR"),
+    ]:
+        existing = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table})"))}
+        if column not in existing:
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+
 app = FastAPI(
     title="Reserve - Local-First Restaurant Back-Office System",
     version="1.0.0"

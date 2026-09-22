@@ -43,6 +43,26 @@ def create_inventory_item(item_in: InventoryItemCreate, db: Session = Depends(ge
     db.refresh(item)
     return item
 
+@router.patch("/{item_id}/cost")
+def update_item_cost(item_id: str, payload: dict, db: Session = Depends(get_db)):
+    item = db.query(InventoryItem).filter(InventoryItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventory item not found.")
+    try:
+        new_cost = Decimal(str(payload.get("current_cost")))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Provide a valid dollar amount.")
+    if new_cost < 0:
+        raise HTTPException(status_code=400, detail="Cost cannot be negative.")
+    item.previous_cost = item.current_cost
+    item.current_cost = new_cost
+    previous = item.previous_cost or Decimal("0")
+    change = new_cost - previous
+    percent = float((change / previous * 100) if previous else (Decimal("100") if new_cost else Decimal("0")))
+    db.add(CostHistory(inventory_item_id=item.id, unit_cost=new_cost, previous_cost=previous, dollar_change=change, percent_change=percent))
+    db.commit()
+    return {"id": item.id, "current_cost": float(item.current_cost)}
+
 @router.get("/{item_id}/cost-history")
 def get_item_cost_history(item_id: str, db: Session = Depends(get_db)):
     history = db.query(CostHistory).filter(CostHistory.inventory_item_id == item_id).order_by(CostHistory.date.desc()).all()
