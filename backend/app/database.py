@@ -2,7 +2,7 @@ import os
 import re
 from contextvars import ContextVar
 from typing import Optional
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, with_loader_criteria
 
 # Set by the authenticated HTTP middleware.  This keeps location isolation in
@@ -26,6 +26,7 @@ engine = create_engine(
 TENANT_DB_DIR = os.path.join(DATA_DIR, "organizations")
 os.makedirs(TENANT_DB_DIR, exist_ok=True)
 _tenant_engines = {}
+_initialized_tenant_databases = set()
 
 def tenant_database_path(database_key: str) -> str:
     if not re.fullmatch(r"[a-z0-9_-]+", database_key):
@@ -40,7 +41,19 @@ def tenant_engine(database_key: str):
 
 def initialize_tenant_database(database_key: str):
     engine_for_tenant = tenant_engine(database_key)
+    if database_key in _initialized_tenant_databases:
+        return engine_for_tenant
     Base.metadata.create_all(bind=engine_for_tenant, checkfirst=True)
+    # Keep existing organization databases compatible with additive model fields.
+    with engine_for_tenant.begin() as connection:
+        for table in Base.metadata.tables.values():
+            existing = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table.name})"))}
+            for column in table.columns:
+                if column.name in existing or column.primary_key:
+                    continue
+                type_sql = column.type.compile(engine_for_tenant.dialect)
+                connection.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {type_sql}"))
+    _initialized_tenant_databases.add(database_key)
     return engine_for_tenant
 
 @event.listens_for(engine, "connect")
@@ -53,8 +66,8 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-LOCATION_SCOPED_TABLES = {"invoices", "invoice_lines", "inventory_count_templates", "inventory_counts", "inventory_transactions", "waste_logs", "sales_imports", "deposits", "audit_logs"}
-ORG_SCOPED_TABLES = LOCATION_SCOPED_TABLES | {"vendors", "inventory_items", "recipes"}
+LOCATION_SCOPED_TABLES = {"invoices", "invoice_lines", "inventory_count_templates", "inventory_counts", "inventory_transactions", "waste_logs", "sales_imports", "deposits", "audit_logs", "vendors", "inventory_items", "recipes"}
+ORG_SCOPED_TABLES = LOCATION_SCOPED_TABLES | {"inventory_transfers"}
 
 @event.listens_for(Session, "do_orm_execute")
 def enforce_tenant_scope(execute_state):
@@ -84,7 +97,9 @@ def stamp_tenant_scope(session, flush_context, instances):
 
 def get_db():
     database_key = current_database_key.get()
-    db = sessionmaker(autocommit=False, autoflush=False, bind=tenant_engine(database_key))() if database_key else SessionLocal()
+    # Tenant databases are long-lived files.  Apply additive model migrations
+    # before their first request after each application start.
+    db = sessionmaker(autocommit=False, autoflush=False, bind=initialize_tenant_database(database_key))() if database_key else SessionLocal()
     try:
         yield db
     finally:

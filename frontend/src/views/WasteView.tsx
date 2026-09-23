@@ -32,6 +32,7 @@ export const WasteView: React.FC = () => {
 
   const enabledUnits = (item?: InventoryItem) => {
     if (!item) return [];
+    if (item.enabled_count_units?.length) return item.enabled_count_units.map(unit => unit.toUpperCase());
     const units = new Set([item.base_uom?.toUpperCase()]);
     item.conversions?.forEach(conversion => { units.add(conversion.from_uom.toUpperCase()); units.add(conversion.to_uom.toUpperCase()); });
     return ['CS', 'SLV', 'PK', 'BTL', 'EA'].filter(unit => units.has(unit));

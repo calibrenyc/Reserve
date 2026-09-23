@@ -70,6 +70,44 @@ def roles(user=Depends(require("users.view")), db: Session = Depends(get_db)):
 def locations(user=Depends(require("locations.view")), db: Session = Depends(get_db)):
     return db.query(Location).filter(Location.organization_id == user.organization_id).all()
 
+class LocationInput(BaseModel):
+    name: str
+    code: Optional[str] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    phone: Optional[str] = None
+    timezone: str = "America/New_York"
+    is_active: bool = True
+
+@router.post("/locations")
+def create_location(payload: LocationInput, actor=Depends(require("locations.create")), db: Session = Depends(get_db)):
+    if not payload.name.strip(): raise HTTPException(400, "Location name is required")
+    location = Location(organization_id=actor.organization_id, **payload.dict(exclude={"name"}), name=payload.name.strip())
+    db.add(location); db.flush()
+    # The person creating a restaurant needs immediate access to operate it.
+    db.add(UserLocation(user_id=actor.id, location_id=location.id))
+    db.commit(); db.refresh(location)
+    return location
+
+@router.put("/locations/{location_id}")
+def update_location(location_id: str, payload: LocationInput, actor=Depends(require("locations.edit")), db: Session = Depends(get_db)):
+    location = db.query(Location).filter(Location.id == location_id, Location.organization_id == actor.organization_id).first()
+    if not location: raise HTTPException(404, "Location not found")
+    for key, value in payload.dict().items(): setattr(location, key, value.strip() if key == "name" else value)
+    if not location.name: raise HTTPException(400, "Location name is required")
+    db.commit(); db.refresh(location)
+    return location
+
+@router.delete("/locations/{location_id}", status_code=204)
+def archive_location(location_id: str, actor=Depends(require("locations.manage")), db: Session = Depends(get_db)):
+    location = db.query(Location).filter(Location.id == location_id, Location.organization_id == actor.organization_id).first()
+    if not location: raise HTTPException(404, "Location not found")
+    location.is_active = False
+    db.commit()
+
 class OrganizationProvision(BaseModel):
     organization_name: str
     location_name: str

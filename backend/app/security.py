@@ -27,7 +27,10 @@ MANAGER_PERMISSIONS = {
     "deposits.create", "deposits.edit", "vendors.view", "vendors.manage", "reports.view", "financials.view_costs",
     "financials.view_food_cost", "financials.view_deposits", "items.lookup"
 }
-SECRET = os.environ.get("RESERVE_AUTH_SECRET") or secrets.token_urlsafe(32)
+# Reserve is a local-first app.  A stable development fallback keeps active
+# browser sessions valid across ordinary local server restarts; deployments can
+# and should provide RESERVE_AUTH_SECRET explicitly.
+SECRET = os.environ.get("RESERVE_AUTH_SECRET") or "reserve-local-development-secret"
 
 def hash_password(password: str) -> str:
     salt = os.urandom(16)

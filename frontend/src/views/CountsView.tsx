@@ -25,10 +25,11 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
   const [templatePendingDeletion, setTemplatePendingDeletion] = useState<CountTemplate | null>(null);
   const [deletingTemplate, setDeletingTemplate] = useState(false);
   const [templateDeleteError, setTemplateDeleteError] = useState('');
+  const [countSaveError, setCountSaveError] = useState('');
   const countInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const fetchCounts = () => {
-    fetch('/api/inventory/counts')
+    apiFetch('/api/inventory/counts')
       .then(res => res.json())
       .then(data => setCounts(Array.isArray(data) ? data : []))
       .catch(err => { console.error(err); setCounts([]); });
@@ -36,7 +37,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
 
   useEffect(() => {
     fetchCounts();
-    fetch('/api/items')
+    apiFetch('/api/items')
       .then(res => {
         if (!res.ok) throw new Error('Unable to load inventory items');
         return res.json();
@@ -52,14 +53,14 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
       });
   }, []);
 
-  const fetchTemplates = () => fetch('/api/inventory/count-templates')
+  const fetchTemplates = () => apiFetch('/api/inventory/count-templates')
     .then(res => res.ok ? res.json() : [])
     .then(data => setTemplates(Array.isArray(data) ? data : []))
     .catch(error => { console.error(error); setTemplates([]); });
   useEffect(() => { fetchTemplates(); }, []);
   useEffect(() => {
     if (!templateId) { setTemplateLines(null); return; }
-    fetch(`/api/inventory/count-templates/${templateId}`).then(res => res.json()).then(template => setTemplateLines(template.lines)).catch(console.error);
+    apiFetch(`/api/inventory/count-templates/${templateId}`).then(res => res.json()).then(template => setTemplateLines(template.lines)).catch(console.error);
   }, [templateId]);
 
   useEffect(() => {
@@ -68,13 +69,14 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
 
   useEffect(() => {
     if (!editCountId) return;
-    fetch(`/api/inventory/counts/${editCountId}`)
+    apiFetch(`/api/inventory/counts/${editCountId}`)
       .then(res => res.ok ? res.json() : Promise.reject(new Error('Unable to load count sheet')))
       .then(count => setCountLines(Object.fromEntries(count.lines.map((line: { inventory_item_id: string; counted_quantity: number }) => [line.inventory_item_id, String(line.counted_quantity)]))))
       .catch(error => console.error(error));
   }, [editCountId]);
 
   const handleSaveCount = async () => {
+    setCountSaveError('');
     const lines = countItems.filter(item => countLines[item.id] !== '' || Object.values(unitCounts[item.id] || {}).some(qty => qty !== '')).map(item => {
       const quantities = unitCounts[item.id] || {};
       const qty = quantities[item.base_uom] ?? countLines[item.id] ?? '0';
@@ -87,20 +89,15 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
       };
     });
 
-    const res = await fetch(editCountId ? `/api/inventory/counts/${editCountId}` : '/api/inventory/counts', {
-      method: editCountId ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: `Count Sheet - ${new Date().toLocaleDateString()}`,
-        lines
-      })
-    });
-
-    if (res.ok) {
+    try {
+      const res = await apiFetch(editCountId ? `/api/inventory/counts/${editCountId}` : '/api/inventory/counts', {
+        method: editCountId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `Count Sheet - ${new Date().toLocaleDateString()}`, lines })
+      });
+      if (!res.ok) { const body = await res.json().catch(() => null); throw new Error(body?.detail || `Unable to save count sheet (${res.status}).`); }
       if (entryMode) onCloseEntry?.(); else setShowCreateModal(false);
-      setCountLines({});
-      fetchCounts();
-    }
+      setCountLines({}); fetchCounts();
+    } catch (error) { setCountSaveError(error instanceof Error ? error.message : 'Unable to save count sheet.'); }
   };
 
   const countItems = templateLines ? items.filter(item => templateLines.some(line => line.inventory_item_id === item.id)).map(item => ({ ...item, storage_location: templateLines.find(line => line.inventory_item_id === item.id)?.storage_location || item.storage_location })) : items;
@@ -112,6 +109,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
 
   const updateQuantity = (itemId: string, value: string) => setCountLines(current => ({ ...current, [itemId]: value }));
   const enabledUnits = (item: InventoryItem) => {
+    if (item.enabled_count_units?.length) return item.enabled_count_units.map(unit => unit.toUpperCase());
     const units = new Set([item.base_uom?.toUpperCase()]);
     item.conversions?.forEach(conversion => { units.add(conversion.from_uom.toUpperCase()); units.add(conversion.to_uom.toUpperCase()); });
     return ['CS', 'SLV', 'PK', 'BTL', 'EA'].filter(unit => units.has(unit));
@@ -153,7 +151,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
   };
 
   const handleApprove = async (countId: string) => {
-    await fetch(`/api/inventory/counts/${countId}/approve`, { method: 'POST' });
+    await apiFetch(`/api/inventory/counts/${countId}/approve`, { method: 'POST' });
     fetchCounts();
   };
 
@@ -307,6 +305,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
               <div><h3 className="font-bold text-zinc-100 text-lg">{editCountId ? 'Edit Inventory Count' : 'Enter Inventory Stock Count'}</h3><p className="text-xs text-zinc-400">Count by operational area, then verify every item is entered.</p></div>
               <div className="text-right"><p className="text-xs text-zinc-400">Whole sheet</p><p className="font-bold text-emerald-400">{totalCompleted}/{countItems.length}</p><p className="mt-1 text-sm font-bold text-emerald-400">${totalValue.toFixed(2)}</p></div>
             </div>
+            {countSaveError && <div className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{countSaveError}</div>}
             <div className="h-2 rounded-full bg-zinc-800 overflow-hidden"><div className="h-full bg-emerald-500 transition-all" style={{ width: `${countItems.length ? totalCompleted / countItems.length * 100 : 0}%` }} /></div>
             <div className="flex min-h-0 flex-1 gap-4">
               <aside className="w-48 shrink-0 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-2">

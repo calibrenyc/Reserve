@@ -10,10 +10,22 @@ class VendorBase(BaseModel):
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
     address: Optional[str] = None
+    website: Optional[str] = None
+    notes: Optional[str] = None
     is_active: bool = True
 
 class VendorCreate(VendorBase):
     pass
+
+class VendorUpdate(BaseModel):
+    name: Optional[str] = None
+    account_number: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    address: Optional[str] = None
+    website: Optional[str] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
 
 class VendorResponse(VendorBase):
     id: str
@@ -72,6 +84,7 @@ class InventoryItemBase(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     count_uom: Optional[str] = None
+    enabled_count_units: Optional[List[str]] = None
     recipe_uom: Optional[str] = None
     pack_size: Optional[str] = None
     case_size: Optional[str] = None
@@ -187,11 +200,30 @@ class WasteLogCreate(BaseModel):
     manager: Optional[str] = None
     notes: Optional[str] = None
 
-# Recipe Schemas
-class RecipeIngredientBase(BaseModel):
+class InventoryTransferCreate(BaseModel):
+    from_location_id: str
+    to_location_id: str
     inventory_item_id: str
     quantity: Decimal
     uom: str
+    notes: Optional[str] = None
+
+# Recipe Schemas
+class RecipeIngredientBase(BaseModel):
+    inventory_item_id: Optional[str] = None
+    sub_recipe_id: Optional[str] = None
+    quantity: Decimal
+    uom: str
+    waste_percent: Optional[Decimal] = None
+    notes: Optional[str] = None
+    sort_order: int = 0
+
+class RecipeVariantBase(BaseModel):
+    name: str = "Standard"
+    yield_quantity: Decimal = Decimal("1")
+    yield_unit: str = "EA"
+    serving_size: Optional[str] = None
+    ingredients: List[RecipeIngredientBase] = []
 
 class RecipeCreate(BaseModel):
     name: str
@@ -200,6 +232,10 @@ class RecipeCreate(BaseModel):
     serving_yield: Decimal = Decimal("1.0")
     menu_price: Decimal = Decimal("0.00")
     ingredients: List[RecipeIngredientBase]
+    recipe_type: str = "MENU_ITEM"
+    area: Optional[str] = None
+    description: Optional[str] = None
+    variants: List[RecipeVariantBase] = []
 
 # Deposit Schemas
 class DepositCreate(BaseModel):

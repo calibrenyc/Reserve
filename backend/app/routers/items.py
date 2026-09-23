@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from decimal import Decimal
 
-from backend.app.database import get_db
+from backend.app.database import get_db, current_location_id, current_organization_id
 from backend.app.models import InventoryItem, UnitConversion, CostHistory, ItemCategory, StorageArea
 from backend.app.security import require
 from backend.app.schemas import InventoryItemCreate, InventoryItemResponse, UnitConversionCreate, UnitConversionResponse
@@ -12,7 +12,14 @@ router = APIRouter(prefix="/api/items", tags=["Inventory Items"])
 
 @router.get("", response_model=List[InventoryItemResponse])
 def list_inventory_items(category: Optional[str] = None, storage_area: Optional[str] = None, needs_review: Optional[bool] = None, include_archived: bool = False, key_items_only: bool = False, db: Session = Depends(get_db)):
-    query = db.query(InventoryItem) if include_archived else db.query(InventoryItem).filter(InventoryItem.is_active == True)
+    # Items are a shared organization catalog.  Counts, transactions, waste,
+    # and templates carry the restaurant location; filtering the catalog by its
+    # original import location made a transferred/imported item disappear at a
+    # new restaurant.
+    query = (db.query(InventoryItem).execution_options(skip_tenant_scope=True)
+             .filter(InventoryItem.organization_id == current_organization_id.get()))
+    if not include_archived:
+        query = query.filter(InventoryItem.is_active == True)
     if category:
         query = query.filter(InventoryItem.category == category)
     if key_items_only:
@@ -23,7 +30,7 @@ def list_inventory_items(category: Optional[str] = None, storage_area: Optional[
 
 @router.post("", response_model=InventoryItemResponse)
 def create_inventory_item(item_in: InventoryItemCreate, db: Session = Depends(get_db)):
-    existing = db.query(InventoryItem).filter(InventoryItem.name == item_in.name).first()
+    existing = db.query(InventoryItem).filter(InventoryItem.name == item_in.name, InventoryItem.location_id == current_location_id.get()).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"Inventory item '{item_in.name}' already exists.")
 

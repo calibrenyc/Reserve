@@ -6,14 +6,14 @@ import zipfile
 import xml.etree.ElementTree as ET
 from decimal import Decimal
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from backend.app.database import get_db
+from backend.app.database import get_db, current_location_id, current_organization_id
 from backend.app.models import (
     InventoryItem, InventoryCount, InventoryCountLine, InventoryTransaction,
-    WasteLog, AuditLog, InventoryCountTemplate, InventoryCountTemplateLine
+    WasteLog, AuditLog, InventoryCountTemplate, InventoryCountTemplateLine, UnitConversion, Location
 )
 from backend.app.schemas import InventoryCountCreate, WasteLogCreate
 from backend.app.services.avt_engine import AvTEngine
@@ -28,11 +28,21 @@ def _multi_unit_base_quantity(db, item, line_in):
     base_qty = sum((qty * AvTEngine.get_unit_conversion_factor(db, item.id, unit, item.base_uom) for unit, qty in quantities.items()), Decimal("0"))
     return base_qty, quantities
 
+def _catalog_item(db, item_id, organization_id=None):
+    return db.query(InventoryItem).execution_options(skip_tenant_scope=True).filter(
+        InventoryItem.id == item_id,
+        InventoryItem.organization_id == (organization_id or current_organization_id.get())
+    ).first()
+
 STANDARD_ALIASES = {
-    "area": {"area"}, "zone": {"zone"}, "item_number": {"item number", "item", "sku"},
-    "item_name": {"item name", "name"}, "brand": {"brand"}, "item_type": {"item type", "type"},
+    "area": {"area", "area zone"}, "zone": {"zone"}, "item_number": {"item number", "item", "sku"},
+    "item_name": {"item name", "name", "description brand"}, "brand": {"brand"}, "item_type": {"item type", "type"},
     "pack_quantity": {"pack qty", "pack quantity"}, "unit_size": {"unit size"},
-    "count_unit": {"count unit", "count uom"}, "price": {"price", "cost"},
+    "count_unit": {"count unit", "count uom", "recipe qty count unit"}, "price": {"price", "cost", "case cost"},
+    "use_cs": {"use cs"}, "use_slv": {"use slv"}, "use_pk": {"use pk"}, "use_btl": {"use btl"}, "use_ea": {"use ea"},
+    "conv_1_from": {"conv 1 from"}, "conv_1_to": {"conv 1 to"}, "conv_1_qty": {"conv 1 qty"},
+    "conv_2_from": {"conv 2 from"}, "conv_2_to": {"conv 2 to"}, "conv_2_qty": {"conv 2 qty"},
+    "recipe_unit": {"recipe unit"}, "vendor_pack_size": {"vendor pack size"},
     "sort_order": {"sort order", "sort"}, "active": {"active"},
 }
 
@@ -56,6 +66,17 @@ def _xlsx_rows(contents: bytes):
         if "xl/sharedStrings.xml" in book.namelist():
             root = ET.fromstring(book.read("xl/sharedStrings.xml"))
             shared = ["".join(node.itertext()) for node in root.findall("x:si", ns)]
+        sheet_titles = {}
+        if "xl/workbook.xml" in book.namelist() and "xl/_rels/workbook.xml.rels" in book.namelist():
+            workbook = ET.fromstring(book.read("xl/workbook.xml"))
+            rels = ET.fromstring(book.read("xl/_rels/workbook.xml.rels"))
+            relationships = {rel.get("Id"): rel.get("Target") for rel in rels}
+            for worksheet in workbook.findall(".//x:sheets/x:sheet", ns):
+                rel_id = worksheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                target = relationships.get(rel_id, "")
+                if target:
+                    path = target.lstrip("/") if target.startswith("/") else f"xl/{target.lstrip('/')}"
+                    sheet_titles[path] = worksheet.get("name", "")
         sheets = [name for name in book.namelist() if name.startswith("xl/worksheets/") and name.endswith(".xml")]
         for sheet in sheets:
             root = ET.fromstring(book.read(sheet)); rows = []
@@ -70,7 +91,7 @@ def _xlsx_rows(contents: bytes):
                         text = shared[int(text)]
                     values[column] = str(text).strip()
                 if values: rows.append(values)
-            yield rows
+            yield sheet_titles.get(sheet, sheet.rsplit("/", 1)[-1].removesuffix(".xml")), rows
 
 def _pdf_rows(contents: bytes):
     """Extract simple tabular rows from a text-based count-sheet PDF."""
@@ -93,7 +114,28 @@ def _pdf_rows(contents: bytes):
             rows.append({chr(65 + index): value for index, value in enumerate(values[:len(headers)])})
     if not rows:
         raise HTTPException(status_code=400, detail="No count-sheet rows could be read from this PDF. Use a text-based PDF with table columns, or upload the original Excel file.")
-    yield [{chr(65 + index): header for index, header in enumerate(headers)}] + rows
+    yield "PDF", [{chr(65 + index): header for index, header in enumerate(headers)}] + rows
+
+def _is_yes(value: str) -> bool:
+    return str(value or "").strip().upper() in {"Y", "YES", "TRUE", "1", "X"}
+
+def _decimal(value: str, label: str, item_name: str) -> Decimal:
+    try:
+        amount = Decimal(str(value).replace("$", "").replace(",", "").strip())
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{label} must be a number for {item_name}.")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail=f"{label} must be greater than zero for {item_name}.")
+    return amount
+
+def _standard_base_uom(enabled_units, conversions):
+    """Use the terminal packaging unit internally without changing count controls."""
+    if not conversions:
+        return "CS" if "CS" in enabled_units else enabled_units[0]
+    sources = {source for source, _, _ in conversions}
+    targets = [target for _, target, _ in conversions]
+    terminals = [unit for unit in targets if unit not in sources]
+    return terminals[-1] if terminals else targets[-1]
 
 @router.post("/count-sheet-template/import")
 async def import_count_sheet_template(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -116,10 +158,15 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
     except (zipfile.BadZipFile, ET.ParseError, ValueError) as error:
         raise HTTPException(status_code=400, detail=f"Could not read workbook: {error}")
     header = data = standard_columns = None
-    for rows in worksheets:
+    standardized_workbook = any(title.strip().casefold() in {"count template", "importer rules"} for title, _ in worksheets)
+    count_template_sheet = next(((title, rows) for title, rows in worksheets if title.strip().casefold() == "count template"), None)
+    if standardized_workbook and not count_template_sheet:
+        raise HTTPException(status_code=400, detail="Reserve standardized workbooks require a Count Template sheet.")
+    sheets_to_scan = [count_template_sheet] if count_template_sheet else worksheets
+    for _, rows in sheets_to_scan:
         for index, row in enumerate(rows[:25]):
             detected_standard = _standard_columns(row)
-            if "item_name" in detected_standard and len(detected_standard) >= 4:
+            if "item_name" in detected_standard and (standardized_workbook or len(detected_standard) >= 4):
                 standard_columns, data = detected_standard, rows[index + 1:]
                 break
             labels = {value.lower().strip(): column for column, value in row.items()}
@@ -128,9 +175,14 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
         if header or standard_columns: break
     if not header and not standard_columns:
         raise HTTPException(status_code=400, detail="No recognizable inventory columns were found. This file does not appear to be a Reserve Standard sheet and Reserve could not confidently identify its inventory columns.")
+    if standardized_workbook:
+        required = {"area", "item_name", "use_cs", "use_slv", "use_pk", "use_btl", "use_ea", "conv_1_from", "conv_1_to", "conv_1_qty", "conv_2_from", "conv_2_to", "conv_2_qty", "price"}
+        missing = sorted(required - set(standard_columns or {}))
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Count Template is missing required standardized columns: {', '.join(missing)}.")
     def column(*terms):
         return next((col for label, col in header.items() if any(term in label for term in terms)), None)
-    area_col, sku_col, desc_col, unit_col = (column("area", "zone"), column("item #", "item number", "sku"), column("description"), column("pack", "unit")) if header else (standard_columns.get("area") or standard_columns.get("zone"), standard_columns.get("item_number"), standard_columns.get("item_name"), standard_columns.get("count_unit") or standard_columns.get("unit_size"))
+    area_col, sku_col, desc_col, unit_col = (column("area", "zone"), column("item #", "item number", "sku"), column("description"), column("pack", "unit")) if header else (standard_columns.get("area") or standard_columns.get("zone"), standard_columns.get("item_number"), standard_columns.get("item_name"), standard_columns.get("vendor_pack_size") or standard_columns.get("unit_size") or standard_columns.get("count_unit"))
     created = updated = skipped = 0
     template_rows = []
     seen_names, seen_skus = set(), set()
@@ -148,44 +200,122 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
             skipped += 1; continue
         seen_names.add(normalized_name)
         if normalized_sku: seen_skus.add(normalized_sku)
-        item = db.query(InventoryItem).filter(InventoryItem.sku == sku).first() if sku else None
-        item = item or db.query(InventoryItem).filter(InventoryItem.name == name).first()
-        unit = row.get(unit_col or "", "").strip() or "EA"
+        catalog = db.query(InventoryItem).execution_options(skip_tenant_scope=True).filter(
+            InventoryItem.organization_id == current_organization_id.get())
+        item = catalog.filter(InventoryItem.sku == sku).first() if sku else None
+        item = item or catalog.filter(InventoryItem.name == name).first()
+        unit = row.get(unit_col or "", "").strip()
+        enabled_units = []
+        conversions = []
+        case_cost = None
+        if standardized_workbook:
+            enabled_units = [unit_name for unit_name in MULTI_COUNT_UNITS if _is_yes(row.get(standard_columns[f"use_{unit_name.lower()}"] or "", ""))]
+            if not enabled_units:
+                raise HTTPException(status_code=400, detail=f"At least one Use column must be Y for {name}.")
+            for number in (1, 2):
+                source = row.get(standard_columns[f"conv_{number}_from"], "").strip().upper()
+                target = row.get(standard_columns[f"conv_{number}_to"], "").strip().upper()
+                quantity = row.get(standard_columns[f"conv_{number}_qty"], "").strip()
+                if any((source, target, quantity)):
+                    if not all((source, target, quantity)):
+                        raise HTTPException(status_code=400, detail=f"Conv {number} must include From, To, and Qty for {name}.")
+                    conversions.append((source, target, _decimal(quantity, f"Conv {number} Qty", name)))
+            case_cost_text = row.get(standard_columns["price"], "").strip()
+            # Some standardized count rows represent open/prepped inventory and
+            # intentionally have no vendor case price.  Blank means "do not
+            # replace the known cost", while a supplied value must be numeric.
+            case_cost = _decimal(case_cost_text, "Case Cost", name) if case_cost_text else None
+            base_uom = _standard_base_uom(enabled_units, conversions)
+            # Current cost is always cost per internal base unit.  Case Cost is
+            # authoritative and is never replaced with a guessed zero value.
+            case_factor = Decimal("1")
+            graph = {}
+            for source, target, factor in conversions:
+                graph.setdefault(source, []).append((target, factor))
+                graph.setdefault(target, []).append((source, Decimal("1") / factor))
+            pending, visited = [("CS", Decimal("1"))], set()
+            while pending:
+                current, factor = pending.pop(0)
+                if current in visited: continue
+                if current == base_uom:
+                    case_factor = factor; break
+                visited.add(current)
+                pending.extend((next_unit, factor * next_factor) for next_unit, next_factor in graph.get(current, []) if next_unit not in visited)
+            current_cost = case_cost / case_factor if case_cost is not None else None
         if item:
             item.storage_location = area
             if sku and not item.sku: item.sku = sku
+            if standardized_workbook:
+                item.base_uom, item.count_uom = base_uom, enabled_units[0]
+                item.enabled_count_units, item.purchase_uom = enabled_units, "CS"
+                if current_cost is not None:
+                    item.current_cost = current_cost
+                db.query(UnitConversion).filter(UnitConversion.inventory_item_id == item.id).delete()
+                for source, target, factor in conversions:
+                    db.add(UnitConversion(inventory_item_id=item.id, from_uom=source, to_uom=target, factor=factor))
             updated += 1
         else:
-            db.add(InventoryItem(name=name, sku=sku or None, storage_location=area, base_uom="EA", purchase_uom=unit, reporting_uom="EA", category="Food"))
+            item = InventoryItem(name=name, sku=sku or None, storage_location=area,
+                base_uom=base_uom if standardized_workbook else "EA",
+                count_uom=enabled_units[0] if standardized_workbook else None,
+                enabled_count_units=enabled_units or None,
+                purchase_uom="CS" if standardized_workbook else unit,
+                reporting_uom=base_uom if standardized_workbook else "EA",
+                current_cost=current_cost if current_cost is not None else Decimal("0"), category="Food")
+            db.add(item); db.flush()
+            for source, target, factor in conversions:
+                db.add(UnitConversion(inventory_item_id=item.id, from_uom=source, to_uom=target, factor=factor))
             created += 1
         template_rows.append((name, sku, area))
     commit_import()
-    template_name = os.path.splitext(os.path.basename(filename))[0]
-    template = db.query(InventoryCountTemplate).filter(InventoryCountTemplate.name == template_name).first()
+    base_template_name = os.path.splitext(os.path.basename(filename))[0]
+    selected_location_id = current_location_id.get()
+    location = db.get(Location, selected_location_id) if selected_location_id else None
+    # Template names are globally unique in the legacy schema, so make the
+    # location explicit rather than failing when the same workbook is loaded
+    # into another restaurant.
+    template_name = f"{base_template_name} ({location.name})" if location else base_template_name
+    template = db.query(InventoryCountTemplate).execution_options(skip_tenant_scope=True).filter(
+        InventoryCountTemplate.name == template_name,
+        InventoryCountTemplate.location_id == selected_location_id
+    ).first()
     if not template:
         template = InventoryCountTemplate(name=template_name); db.add(template); db.flush()
     else:
         template.lines.clear(); db.flush()
     for order, (name, sku, area) in enumerate(template_rows):
-        item = db.query(InventoryItem).filter(InventoryItem.sku == sku).first() if sku else None
-        item = item or db.query(InventoryItem).filter(InventoryItem.name == name).first()
+        catalog = db.query(InventoryItem).execution_options(skip_tenant_scope=True).filter(
+            InventoryItem.organization_id == current_organization_id.get())
+        item = catalog.filter(InventoryItem.sku == sku).first() if sku else None
+        item = item or catalog.filter(InventoryItem.name == name).first()
         if item:
             db.add(InventoryCountTemplateLine(template_id=template.id, inventory_item_id=item.id, storage_location=area, sort_order=order))
     commit_import()
-    return {"created": created, "updated": updated, "skipped": skipped, "areas": sorted({area for _, _, area in template_rows}), "template_id": template.id, "template_name": template.name}
+    return {"created": created, "updated": updated, "skipped": skipped, "standardized_workbook": standardized_workbook, "areas": sorted({area for _, _, area in template_rows}), "template_id": template.id, "template_name": template.name}
 
 @router.get("/count-templates")
-def list_count_templates(db: Session = Depends(get_db)):
-    return [{"id": t.id, "name": t.name, "line_count": len(t.lines)} for t in db.query(InventoryCountTemplate).order_by(InventoryCountTemplate.name).all()]
+def list_count_templates(request: Request, db: Session = Depends(get_db)):
+    templates = db.query(InventoryCountTemplate).execution_options(skip_tenant_scope=True).filter(
+        InventoryCountTemplate.organization_id == request.state.organization_id,
+        InventoryCountTemplate.location_id == request.state.location_id
+    ).order_by(InventoryCountTemplate.name).all()
+    return [{"id": t.id, "name": t.name, "line_count": len(t.lines)} for t in templates]
 
 @router.get("/count-templates/{template_id}")
-def get_count_template(template_id: str, db: Session = Depends(get_db)):
-    template = db.query(InventoryCountTemplate).filter(InventoryCountTemplate.id == template_id).first()
+def get_count_template(template_id: str, request: Request, db: Session = Depends(get_db)):
+    template = db.query(InventoryCountTemplate).execution_options(skip_tenant_scope=True).filter(
+        InventoryCountTemplate.id == template_id, InventoryCountTemplate.organization_id == request.state.organization_id,
+        InventoryCountTemplate.location_id == request.state.location_id
+    ).first()
     if not template: raise HTTPException(status_code=404, detail="Count template not found.")
-    return {"id": template.id, "name": template.name, "lines": [{"id": l.id, "inventory_item_id": l.inventory_item_id, "item_name": l.inventory_item.name, "storage_location": l.storage_location, "current_cost": float(l.inventory_item.current_cost or 0), "sort_order": l.sort_order} for l in sorted(template.lines, key=lambda line: line.sort_order)]}
+    item_ids = [line.inventory_item_id for line in template.lines]
+    catalog = {item.id: item for item in db.query(InventoryItem).execution_options(skip_tenant_scope=True).filter(
+        InventoryItem.organization_id == request.state.organization_id, InventoryItem.id.in_(item_ids)
+    ).all()}
+    return {"id": template.id, "name": template.name, "lines": [{"id": l.id, "inventory_item_id": l.inventory_item_id, "item_name": catalog[l.inventory_item_id].name, "storage_location": l.storage_location, "current_cost": float(catalog[l.inventory_item_id].current_cost or 0), "sort_order": l.sort_order} for l in sorted(template.lines, key=lambda line: line.sort_order) if l.inventory_item_id in catalog]}
 
 @router.put("/count-templates/{template_id}")
-def update_count_template(template_id: str, payload: dict, db: Session = Depends(get_db)):
+def update_count_template(template_id: str, payload: dict, request: Request, db: Session = Depends(get_db)):
     template = db.query(InventoryCountTemplate).filter(InventoryCountTemplate.id == template_id).first()
     if not template: raise HTTPException(status_code=404, detail="Count template not found.")
     template.name = payload.get("name", template.name)
@@ -206,7 +336,7 @@ def update_count_template(template_id: str, payload: dict, db: Session = Depends
         if db.query(InventoryItem).filter(InventoryItem.id == line.get("inventory_item_id")).first():
             db.add(InventoryCountTemplateLine(template_id=template.id, inventory_item_id=line["inventory_item_id"], storage_location=line.get("storage_location") or "Unassigned", sort_order=order))
     db.commit()
-    return get_count_template(template_id, db)
+    return get_count_template(template_id, request, db)
 
 @router.delete("/count-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_count_template(template_id: str, db: Session = Depends(get_db)):
@@ -237,12 +367,18 @@ def sync_count_template_items(template_id: str, db: Session = Depends(get_db)):
     return {"template_id": template.id, "template_name": template.name, "line_count": len(items)}
 
 @router.get("/counts")
-def list_counts(db: Session = Depends(get_db)):
-    return db.query(InventoryCount).order_by(InventoryCount.count_date.desc()).all()
+def list_counts(request: Request, db: Session = Depends(get_db)):
+    return db.query(InventoryCount).execution_options(skip_tenant_scope=True).filter(
+        InventoryCount.organization_id == request.state.organization_id,
+        InventoryCount.location_id == request.state.location_id
+    ).order_by(InventoryCount.count_date.desc()).all()
 
 @router.get("/counts/{count_id}")
-def get_count(count_id: str, db: Session = Depends(get_db)):
-    count = db.query(InventoryCount).filter(InventoryCount.id == count_id).first()
+def get_count(count_id: str, request: Request, db: Session = Depends(get_db)):
+    count = db.query(InventoryCount).execution_options(skip_tenant_scope=True).filter(
+        InventoryCount.id == count_id, InventoryCount.organization_id == request.state.organization_id,
+        InventoryCount.location_id == request.state.location_id
+    ).first()
     if not count:
         raise HTTPException(status_code=404, detail="Count not found.")
     return {
@@ -251,11 +387,12 @@ def get_count(count_id: str, db: Session = Depends(get_db)):
     }
 
 @router.post("/counts")
-def create_count(count_in: InventoryCountCreate, db: Session = Depends(get_db)):
+def create_count(count_in: InventoryCountCreate, request: Request, db: Session = Depends(get_db)):
     count = InventoryCount(
         name=count_in.name,
         employee_name=count_in.employee_name,
         location_name=count_in.location_name,
+        location_id=request.state.location_id,
         status="Draft",
         notes=count_in.notes
     )
@@ -264,7 +401,7 @@ def create_count(count_in: InventoryCountCreate, db: Session = Depends(get_db)):
 
     total_val = Decimal("0.00")
     for line_in in count_in.lines:
-        item = db.query(InventoryItem).filter(InventoryItem.id == line_in.inventory_item_id).first()
+        item = _catalog_item(db, line_in.inventory_item_id, request.state.organization_id)
         if not item:
             continue
 
@@ -292,8 +429,11 @@ def create_count(count_in: InventoryCountCreate, db: Session = Depends(get_db)):
     return count
 
 @router.put("/counts/{count_id}")
-def update_count(count_id: str, count_in: InventoryCountCreate, db: Session = Depends(get_db)):
-    count = db.query(InventoryCount).filter(InventoryCount.id == count_id).first()
+def update_count(count_id: str, count_in: InventoryCountCreate, request: Request, db: Session = Depends(get_db)):
+    count = db.query(InventoryCount).execution_options(skip_tenant_scope=True).filter(
+        InventoryCount.id == count_id, InventoryCount.organization_id == request.state.organization_id,
+        InventoryCount.location_id == request.state.location_id
+    ).first()
     if not count:
         raise HTTPException(status_code=404, detail="Count not found.")
     if count.status == "Approved":
@@ -303,7 +443,7 @@ def update_count(count_id: str, count_in: InventoryCountCreate, db: Session = De
     count.lines.clear()
     total_val = Decimal("0.00")
     for line_in in count_in.lines:
-        item = db.query(InventoryItem).filter(InventoryItem.id == line_in.inventory_item_id).first()
+        item = _catalog_item(db, line_in.inventory_item_id, request.state.organization_id)
         if not item:
             continue
         unit_cost = item.current_cost or Decimal("0.00")
@@ -453,4 +593,3 @@ def delete_waste_log(waste_id: str, db: Session = Depends(get_db)):
     db.delete(waste)
     db.add(AuditLog(action="Waste Entry Deleted", entity_type="WasteLog", entity_id=waste_id, original_value=f"{waste.quantity} {waste.uom}: {waste.reason}"))
     db.commit()
-

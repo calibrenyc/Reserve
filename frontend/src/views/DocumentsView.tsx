@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UploadCloud, FileText, CheckCircle2, Clock, Trash2, Eye, RefreshCw } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle2, Clock, Trash2, Link2, RefreshCw } from 'lucide-react';
 import { Invoice } from '../types';
 
 interface DocumentsViewProps {
-  onReviewInvoice?: (invoiceId: string) => void;
+  onOpenInvoice?: (invoiceId: string) => void;
 }
 
-export const DocumentsView: React.FC<DocumentsViewProps> = ({ onReviewInvoice }) => {
+export const DocumentsView: React.FC<DocumentsViewProps> = ({ onOpenInvoice }) => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -83,7 +83,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({ onReviewInvoice })
             <FileText className="w-6 h-6 text-teal-400" />
             Documents Center
           </h2>
-          <p className="text-slate-400 text-sm">Upload vendor invoices, receipts, and operational documents for OCR scanning & processing</p>
+          <p className="text-slate-400 text-sm">Every uploaded invoice is stored here and linked to its Invoice Management record.</p>
         </div>
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -121,7 +121,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({ onReviewInvoice })
             <tr>
               <th className="p-4">Document / File</th>
               <th className="p-4">Vendor</th>
-              <th className="p-4">Invoice #</th>
+              <th className="p-4">Linked invoice</th>
               <th className="p-4">Date</th>
               <th className="p-4 text-right">Total Amount</th>
               <th className="p-4 text-center">OCR Status</th>
@@ -145,10 +145,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({ onReviewInvoice })
                     <span className="truncate max-w-[200px]">{inv.file_path ? inv.file_path.split(/[\/\\]/).pop() : `Invoice ${inv.id}`}</span>
                   </td>
                   <td className="p-4 text-zinc-300">{inv.vendor_name_raw || 'Unassigned'}</td>
-                  <td className="p-4 text-zinc-400 font-mono text-xs">{inv.invoice_number || '-'}</td>
+                  <td className="p-4">
+                    <p className="font-mono text-xs text-zinc-300">{inv.invoice_number || 'Invoice pending review'}</p>
+                    <p className="mt-1 inline-flex items-center gap-1 text-xs text-teal-400"><Link2 className="h-3 w-3" />Used in Invoice Management</p>
+                  </td>
                   <td className="p-4 text-zinc-400">{inv.invoice_date || '-'}</td>
                   <td className="p-4 text-right font-bold text-slate-100">
-                    {inv.total_amount ? `$${inv.total_amount.toFixed(2)}` : '-'}
+                    {Number(inv.total_amount) ? `$${Number(inv.total_amount).toFixed(2)}` : '-'}
                   </td>
                   <td className="p-4 text-center">
                     <span className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-bold ${
@@ -161,13 +164,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({ onReviewInvoice })
                     </span>
                   </td>
                   <td className="p-4 text-right space-x-2">
-                    {onReviewInvoice && (
+                    {onOpenInvoice && (
                       <button
-                        onClick={() => onReviewInvoice(inv.id)}
+                        onClick={() => onOpenInvoice(inv.id)}
                         className="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold rounded text-zinc-200 inline-flex items-center gap-1 border border-zinc-700 cursor-pointer"
                       >
-                        <Eye className="w-3.5 h-3.5 text-teal-400" />
-                        <span>Review</span>
+                        <Link2 className="w-3.5 h-3.5 text-teal-400" />
+                        <span>Open invoice</span>
                       </button>
                     )}
                     <button
@@ -187,4 +190,3 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({ onReviewInvoice })
     </div>
   );
 };
-

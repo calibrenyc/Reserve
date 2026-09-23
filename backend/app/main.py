@@ -8,7 +8,7 @@ from backend.app.database import engine, Base, SessionLocal, current_organizatio
 from backend.app.models import Vendor, InventoryItem, UnitConversion, Organization, Location, User, Role, RolePermission, UserLocation
 from backend.app.security import ALL_PERMISSIONS, MANAGER_PERMISSIONS, hash_password, token_user, user_permissions, location_ids
 from backend.app.routers import (
-    vendors, items, invoices, inventory, recipes, sales, avt, deposits, dashboard, backups, audit, auth, admin, business_start
+    vendors, items, invoices, inventory, transfers, recipes, sales, avt, deposits, dashboard, backups, audit, auth, admin, business_start
 )
 
 # Create database tables safely with checkfirst=True
@@ -59,6 +59,7 @@ app.include_router(invoices.router)
 app.include_router(vendors.router)
 app.include_router(items.router)
 app.include_router(inventory.router)
+app.include_router(transfers.router)
 app.include_router(recipes.router)
 app.include_router(sales.router)
 app.include_router(avt.router)
@@ -77,7 +78,15 @@ async def enforce_api_access(request, call_next):
         return await call_next(request)
     db = SessionLocal()
     try:
-        user = token_user(request.headers.get("Authorization", "").removeprefix("Bearer ").strip(), db)
+        try:
+            user = token_user(request.headers.get("Authorization", "").removeprefix("Bearer ").strip(), db)
+        except HTTPException as exc:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        except Exception:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "Invalid or expired session"}, status_code=401)
+
         if path.startswith("/api/admin"):
             request.state.user_id = user.id
             return await call_next(request)
@@ -96,6 +105,8 @@ async def enforce_api_access(request, call_next):
             "waste.delete" if path.startswith("/api/inventory/waste") and request.method == "DELETE" else
             "inventory.view" if path.startswith("/api/inventory") and request.method == "GET" else
             "inventory.count" if path.startswith("/api/inventory") else
+            "transfers.view" if path.startswith("/api/transfers") and request.method == "GET" else
+            "transfers.create" if path.startswith("/api/transfers") else
             "recipes.view" if path.startswith("/api/recipes") and request.method == "GET" else
             "recipes.manage" if path.startswith("/api/recipes") else
             "sales.view" if path.startswith("/api/sales") and request.method == "GET" else
@@ -119,7 +130,7 @@ async def enforce_api_access(request, call_next):
         if not selected or selected not in allowed:
             from fastapi.responses import JSONResponse
             return JSONResponse({"detail": "A permitted location must be selected"}, status_code=403)
-        request.state.user_id, request.state.location_id = user.id, selected
+        request.state.user_id, request.state.location_id, request.state.organization_id = user.id, selected, user.organization_id
         organization = db.get(Organization, user.organization_id)
         org_token = current_organization_id.set(user.organization_id)
         location_token = current_location_id.set(selected)
@@ -128,6 +139,9 @@ async def enforce_api_access(request, call_next):
         finally:
             current_organization_id.reset(org_token); current_location_id.reset(location_token)
             if database_token is not None: current_database_key.reset(database_token)
+    except Exception as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": f"Internal server error: {exc}", "success": False}, status_code=500)
     finally: db.close()
 
 # Mount Invoice Upload Files for local review preview
@@ -228,11 +242,13 @@ def seed_default_data():
 
         # Existing single-location records become Main Restaurant records.
         for model in (Vendor, InventoryItem):
-            db.query(model).filter(model.organization_id == None).update({model.organization_id: org.id})
+            db.query(model).filter(model.organization_id == None).update({model.organization_id: org.id, model.location_id: location.id})
+            db.query(model).filter(model.organization_id == org.id, model.location_id == None).update({model.location_id: location.id})
         from backend.app.models import Invoice, InvoiceLine, InventoryCountTemplate, InventoryCount, InventoryTransaction, WasteLog, Recipe, SalesImport, Deposit, AuditLog
         for model in (Invoice, InvoiceLine, InventoryCountTemplate, InventoryCount, InventoryTransaction, WasteLog, SalesImport, Deposit, AuditLog):
             db.query(model).filter(model.organization_id == None).update({model.organization_id: org.id, model.location_id: location.id})
-        db.query(Recipe).filter(Recipe.organization_id == None).update({Recipe.organization_id: org.id})
+        db.query(Recipe).filter(Recipe.organization_id == None).update({Recipe.organization_id: org.id, Recipe.location_id: location.id})
+        db.query(Recipe).filter(Recipe.organization_id == org.id, Recipe.location_id == None).update({Recipe.location_id: location.id})
 
         db.commit()
     finally:

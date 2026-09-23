@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import datetime
 
+from backend.app.database import current_location_id
 from backend.app.models import (
     InventoryItem, UnitConversion, InventoryTransaction, WasteLog,
     Recipe, RecipeIngredient, SalesLine, InventoryCount, InventoryCountLine
@@ -63,8 +64,19 @@ class AvTEngine:
         return Decimal("1.0")
 
     @staticmethod
-    def calculate_avt(db: Session, start_date: datetime.date, end_date: datetime.date, category_filter: Optional[str] = None):
-        items_query = db.query(InventoryItem).filter(InventoryItem.is_active == True)
+    def calculate_avt(db: Session, start_date: datetime.date, end_date: datetime.date, category_filter: Optional[str] = None, location_id: Optional[str] = None):
+        location_id = location_id if location_id is not None else current_location_id.get()
+        transaction_ids = {row[0] for row in db.query(InventoryTransaction.inventory_item_id).execution_options(skip_tenant_scope=True).filter(
+            InventoryTransaction.location_id == location_id
+        ).distinct().all()}
+        count_ids = {row[0] for row in db.query(InventoryCountLine.inventory_item_id).execution_options(skip_tenant_scope=True).join(InventoryCount).filter(
+            InventoryCount.location_id == location_id
+        ).distinct().all()}
+        # Catalog records may originate at another restaurant.  Include only
+        # records that have inventory activity at the selected location.
+        items_query = db.query(InventoryItem).execution_options(skip_tenant_scope=True).filter(
+            InventoryItem.is_active == True, InventoryItem.id.in_(transaction_ids | count_ids)
+        )
         if category_filter:
             items_query = items_query.filter(InventoryItem.category == category_filter)
             
@@ -79,8 +91,9 @@ class AvTEngine:
             unit_cost = Decimal(str(item.current_cost or 0.0))
             
             # 1. Beginning Inventory (Last count prior or at start_date)
-            beg_count_line = db.query(InventoryCountLine).join(InventoryCount).filter(
+            beg_count_line = db.query(InventoryCountLine).execution_options(skip_tenant_scope=True).join(InventoryCount).filter(
                 InventoryCountLine.inventory_item_id == item.id,
+                InventoryCount.location_id == location_id,
                 func.date(InventoryCount.count_date) <= start_date,
                 InventoryCount.status == "Approved"
             ).order_by(InventoryCount.count_date.desc()).first()
@@ -88,8 +101,9 @@ class AvTEngine:
             beg_qty = Decimal(str(beg_count_line.base_quantity)) if beg_count_line else Decimal("0.0")
 
             # 2. Purchases during period
-            purchases = db.query(func.coalesce(func.sum(InventoryTransaction.converted_base_quantity), 0.0)).filter(
+            purchases = db.query(func.coalesce(func.sum(InventoryTransaction.converted_base_quantity), 0.0)).execution_options(skip_tenant_scope=True).filter(
                 InventoryTransaction.inventory_item_id == item.id,
+                InventoryTransaction.location_id == location_id,
                 InventoryTransaction.transaction_type == "Purchase",
                 func.date(InventoryTransaction.timestamp) >= start_date,
                 func.date(InventoryTransaction.timestamp) <= end_date
@@ -97,30 +111,34 @@ class AvTEngine:
             purch_qty = Decimal(str(purchases))
 
             # 3. Transfers In / Out
-            trans_in = Decimal(str(db.query(func.coalesce(func.sum(InventoryTransaction.converted_base_quantity), 0.0)).filter(
+            trans_in = Decimal(str(db.query(func.coalesce(func.sum(InventoryTransaction.converted_base_quantity), 0.0)).execution_options(skip_tenant_scope=True).filter(
                 InventoryTransaction.inventory_item_id == item.id,
+                InventoryTransaction.location_id == location_id,
                 InventoryTransaction.transaction_type == "Transfer In",
                 func.date(InventoryTransaction.timestamp) >= start_date,
                 func.date(InventoryTransaction.timestamp) <= end_date
             ).scalar()))
 
-            trans_out = Decimal(str(db.query(func.coalesce(func.sum(InventoryTransaction.converted_base_quantity), 0.0)).filter(
+            trans_out = Decimal(str(db.query(func.coalesce(func.sum(InventoryTransaction.converted_base_quantity), 0.0)).execution_options(skip_tenant_scope=True).filter(
                 InventoryTransaction.inventory_item_id == item.id,
+                InventoryTransaction.location_id == location_id,
                 InventoryTransaction.transaction_type == "Transfer Out",
                 func.date(InventoryTransaction.timestamp) >= start_date,
                 func.date(InventoryTransaction.timestamp) <= end_date
             ).scalar()))
 
             # 4. Waste
-            waste_qty = Decimal(str(db.query(func.coalesce(func.sum(WasteLog.base_quantity), 0.0)).filter(
+            waste_qty = Decimal(str(db.query(func.coalesce(func.sum(WasteLog.base_quantity), 0.0)).execution_options(skip_tenant_scope=True).filter(
                 WasteLog.inventory_item_id == item.id,
+                WasteLog.location_id == location_id,
                 func.date(WasteLog.timestamp) >= start_date,
                 func.date(WasteLog.timestamp) <= end_date
             ).scalar()))
 
             # 5. Ending Inventory
-            end_count_line = db.query(InventoryCountLine).join(InventoryCount).filter(
+            end_count_line = db.query(InventoryCountLine).execution_options(skip_tenant_scope=True).join(InventoryCount).filter(
                 InventoryCountLine.inventory_item_id == item.id,
+                InventoryCount.location_id == location_id,
                 func.date(InventoryCount.count_date) <= end_date,
                 InventoryCount.status == "Approved"
             ).order_by(InventoryCount.count_date.desc()).first()
@@ -197,4 +215,3 @@ class AvTEngine:
             },
             "items": results
         }
-

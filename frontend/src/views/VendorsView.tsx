@@ -1,98 +1,29 @@
-import React, { useState, useEffect } from 'react';
-import { Building2, Plus, Phone } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Building2, ExternalLink, Globe2, Mail, MapPin, Pencil, Phone, Plus, Save, Search, StickyNote, Trash2, X } from 'lucide-react';
 import { Vendor } from '../types';
+import { apiFetch } from '../api';
+
+type Draft = Pick<Vendor, 'name' | 'account_number' | 'contact_email' | 'contact_phone' | 'address' | 'website' | 'notes'>;
+const empty: Draft = { name: '', account_number: '', contact_email: '', contact_phone: '', address: '', website: '', notes: '' };
+const field = 'w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-emerald-500 focus:outline-none';
+
+function Website({ url }: { url?: string }) {
+  if (!url) return null;
+  const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  return <a href={href} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex items-center gap-1.5 text-sm text-emerald-400 hover:text-emerald-300"><Globe2 className="h-4 w-4" />{url.replace(/^https?:\/\//i, '')}<ExternalLink className="h-3.5 w-3.5" /></a>;
+}
 
 export const VendorsView: React.FC = () => {
-  const [vendors, setVendors] = useState<Vendor[]>([]);
-  const [name, setName] = useState('');
-  const [accNum, setAccNum] = useState('');
-  const [phone, setPhone] = useState('');
+  const [vendors, setVendors] = useState<Vendor[]>([]), [search, setSearch] = useState(''), [selected, setSelected] = useState<Vendor | null>(null), [draft, setDraft] = useState<Draft>(empty), [isNew, setIsNew] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
+  const refresh = async () => { try { const r = await apiFetch('/api/vendors'); setVendors(r.ok ? await r.json() : []); } catch { setVendors([]); } };
+  useEffect(() => { refresh(); }, []);
+  const filtered = useMemo(() => vendors.filter(v => [v.name, v.account_number, v.contact_email, v.contact_phone, v.website].filter(Boolean).join(' ').toLowerCase().includes(search.toLowerCase())), [vendors, search]);
+  const set = (key: keyof Draft, value: string) => setDraft(d => ({ ...d, [key]: value }));
+  const open = (v: Vendor) => { setSelected(v); setDraft({ name: v.name, account_number: v.account_number || '', contact_email: v.contact_email || '', contact_phone: v.contact_phone || '', address: v.address || '', website: v.website || '', notes: v.notes || '' }); setIsNew(false); setError(''); };
+  const save = async (e: React.FormEvent) => { e.preventDefault(); if (!draft.name.trim()) return setError('A vendor name is required.'); setSaving(true); setError(''); try { const r = await apiFetch(isNew ? '/api/vendors' : `/api/vendors/${selected?.id}`, { method: isNew ? 'POST' : 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...draft, name: draft.name.trim() }) }); const data = await r.json(); if (!r.ok) throw new Error(data.detail || 'Unable to save vendor.'); open(data); await refresh(); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to save vendor.'); } finally { setSaving(false); } };
+  const remove = async () => { if (!selected || !window.confirm(`Remove ${selected.name} from the vendor directory?`)) return; setSaving(true); setError(''); try { const r = await apiFetch(`/api/vendors/${selected.id}`, { method: 'DELETE' }); if (!r.ok) throw new Error('Unable to remove vendor.'); await refresh(); setSelected(null); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to remove vendor.'); } finally { setSaving(false); } };
 
-  const fetchVendors = () => {
-    fetch('/api/vendors')
-      .then(res => res.json())
-      .then(data => setVendors(Array.isArray(data) ? data : []))
-      .catch(err => console.error(err));
-  };
+  if (selected || isNew) return <div className="space-y-6"><button onClick={() => { setSelected(null); setIsNew(false); }} className="inline-flex items-center gap-2 text-sm font-medium text-zinc-400 hover:text-zinc-100"><ArrowLeft className="h-4 w-4" />Back to vendors</button><form onSubmit={save} className="mx-auto max-w-5xl"><div className="mb-6 flex flex-wrap items-start justify-between gap-4"><div className="flex items-center gap-4"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-emerald-500/10 text-emerald-400"><Building2 className="h-7 w-7" /></div><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-emerald-400">Vendor profile</p><h2 className="text-2xl font-bold text-zinc-100">{isNew ? 'New vendor' : selected?.name}</h2><p className="mt-1 text-sm text-zinc-400">Keep the details your team needs in one calling card.</p></div></div><div className="flex items-center gap-2">{!isNew && <button type="button" disabled={saving} onClick={remove} className="inline-flex items-center gap-2 rounded-lg border border-red-500/40 px-3 py-2.5 text-sm font-semibold text-red-300 hover:bg-red-500/10 disabled:opacity-60"><Trash2 className="h-4 w-4" />Remove</button>}<button disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"><Save className="h-4 w-4" />{saving ? 'Saving…' : 'Save vendor'}</button></div></div>{error && <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div>}<div className="grid gap-5 lg:grid-cols-3"><section className="space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 lg:col-span-2"><h3 className="font-semibold text-zinc-100">Business information</h3><label className="block text-sm text-zinc-300">Vendor name<input autoFocus value={draft.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Sysco" className={`${field} mt-1.5`} /></label><div className="grid gap-4 sm:grid-cols-2"><label className="text-sm text-zinc-300">Account number<input value={draft.account_number} onChange={e => set('account_number', e.target.value)} className={`${field} mt-1.5`} /></label><label className="text-sm text-zinc-300">Website<input value={draft.website} onChange={e => set('website', e.target.value)} placeholder="vendor.com" className={`${field} mt-1.5`} /></label></div><label className="block text-sm text-zinc-300">Street address<textarea value={draft.address} onChange={e => set('address', e.target.value)} rows={3} placeholder="Street, city, state, ZIP" className={`${field} mt-1.5 resize-none`} /></label></section><aside className="space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5"><h3 className="font-semibold text-zinc-100">Contact</h3><label className="block text-sm text-zinc-300">Phone<input value={draft.contact_phone} onChange={e => set('contact_phone', e.target.value)} placeholder="(555) 555-5555" className={`${field} mt-1.5`} /></label><label className="block text-sm text-zinc-300">Email<input type="email" value={draft.contact_email} onChange={e => set('contact_email', e.target.value)} placeholder="orders@vendor.com" className={`${field} mt-1.5`} /></label></aside></div><section className="mt-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-5"><div className="mb-3 flex items-center gap-2"><StickyNote className="h-4 w-4 text-emerald-400" /><h3 className="font-semibold text-zinc-100">Team notes</h3></div><textarea value={draft.notes} onChange={e => set('notes', e.target.value)} rows={7} placeholder="Delivery days, ordering cutoff, account manager details, pricing notes, or anything useful for the team…" className={`${field} resize-y`} /></section></form></div>;
 
-  useEffect(() => {
-    fetchVendors();
-  }, []);
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    await fetch('/api/vendors', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, account_number: accNum, contact_phone: phone })
-    });
-    setName('');
-    setAccNum('');
-    setPhone('');
-    fetchVendors();
-  };
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-zinc-100">Vendors Database</h2>
-        <p className="text-zinc-400 text-sm">Manage vendor directories and account references</p>
-      </div>
-
-      {/* Add Vendor Form */}
-      <form onSubmit={handleCreate} className="bg-zinc-900 border border-zinc-700 p-4 rounded-xl flex items-center gap-3">
-        <input
-          type="text"
-          placeholder="Vendor Name (e.g. Sysco, US Foods)"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          className="bg-zinc-950 border border-zinc-700 rounded-lg px-3.5 py-2.5 text-sm text-zinc-100 flex-1 focus:border-emerald-500 focus:outline-none"
-        />
-        <input
-          type="text"
-          placeholder="Account #"
-          value={accNum}
-          onChange={e => setAccNum(e.target.value)}
-          className="bg-zinc-950 border border-zinc-700 rounded-lg px-3.5 py-2.5 text-sm text-zinc-100 w-40 focus:border-emerald-500 focus:outline-none"
-        />
-        <input
-          type="text"
-          placeholder="Phone #"
-          value={phone}
-          onChange={e => setPhone(e.target.value)}
-          className="bg-zinc-950 border border-zinc-700 rounded-lg px-3.5 py-2.5 text-sm text-zinc-100 w-40 focus:border-emerald-500 focus:outline-none"
-        />
-        <button
-          type="submit"
-          className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm rounded-lg flex items-center space-x-1.5 cursor-pointer shadow-lg shadow-emerald-950/40 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Vendor</span>
-        </button>
-      </form>
-
-      {/* Vendor Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {vendors.map(vendor => (
-          <div key={vendor.id} className="bg-zinc-900 border border-zinc-700 p-5 rounded-xl space-y-3 shadow-xl">
-            <div className="flex items-center space-x-3">
-              <div className="p-2.5 bg-emerald-500/10 rounded-lg text-emerald-400">
-                <Building2 className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-bold text-zinc-100 text-base">{vendor.name}</h3>
-                <p className="text-xs text-zinc-400">Acc #: {vendor.account_number || 'N/A'}</p>
-              </div>
-            </div>
-            {vendor.contact_phone && (
-              <p className="text-xs text-zinc-300 flex items-center gap-1.5">
-                <Phone className="w-3.5 h-3.5 text-zinc-400" /> {vendor.contact_phone}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <div className="space-y-6"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-emerald-400">Directory</p><h2 className="text-2xl font-bold text-zinc-100">Vendors</h2><p className="mt-1 text-sm text-zinc-400">Vendor calling cards for contacts, ordering information, and team context.</p></div><button onClick={() => { setSelected(null); setDraft(empty); setIsNew(true); setError(''); }} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500"><Plus className="h-4 w-4" />Add vendor</button></div><div className="relative max-w-md"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search vendors, contact, or account" className={`${field} pl-10`} />{search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200"><X className="h-4 w-4" /></button>}</div>{filtered.length ? <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{filtered.map(v => <button key={v.id} onClick={() => open(v)} className="group min-h-[224px] rounded-2xl border border-zinc-800 bg-zinc-900 p-5 text-left shadow-xl shadow-black/10 transition hover:-translate-y-0.5 hover:border-emerald-500/50 hover:bg-zinc-800/90"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-emerald-500/10 text-emerald-400"><Building2 className="h-5 w-5" /></div><div className="min-w-0"><h3 className="truncate font-semibold text-zinc-100">{v.name}</h3><p className="mt-0.5 text-xs text-zinc-500">{v.account_number ? `Account #${v.account_number}` : 'No account number'}</p></div></div><Pencil className="h-4 w-4 shrink-0 text-zinc-600 group-hover:text-emerald-400" /></div><div className="mt-5 space-y-2.5 text-sm text-zinc-300">{v.contact_phone && <p className="flex items-center gap-2"><Phone className="h-4 w-4 text-zinc-500" />{v.contact_phone}</p>}{v.contact_email && <p className="flex min-w-0 items-center gap-2"><Mail className="h-4 w-4 shrink-0 text-zinc-500" /><span className="truncate">{v.contact_email}</span></p>}{v.website && <Website url={v.website} />}{v.address && <p className="flex items-start gap-2 text-zinc-400"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" /><span className="line-clamp-2">{v.address}</span></p>}</div>{v.notes && <p className="mt-4 line-clamp-2 border-t border-zinc-800 pt-3 text-xs leading-relaxed text-zinc-500">{v.notes}</p>}</button>)}</div> : <div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/50 py-16 text-center"><Building2 className="mx-auto h-8 w-8 text-zinc-600" /><h3 className="mt-3 font-semibold text-zinc-200">{search ? 'No vendors found' : 'No vendors yet'}</h3><p className="mt-1 text-sm text-zinc-500">{search ? 'Try a different search.' : 'Add a vendor to start your directory.'}</p></div>}</div>;
 };

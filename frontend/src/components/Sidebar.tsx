@@ -83,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, can
   ];
 
   return (
-    <aside className="w-64 bg-zinc-800 border-r border-zinc-700 flex flex-col h-screen select-none">
+    <aside className="w-64 bg-zinc-800 border-r border-zinc-700 flex flex-col h-full select-none">
       <div className="px-4 py-5 border-b border-zinc-700 bg-black">
         <img
           src={reserveLogo}

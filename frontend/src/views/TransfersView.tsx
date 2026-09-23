@@ -1,109 +1,30 @@
-import React, { useState } from 'react';
-import { ArrowLeftRight, Plus, Building2, Package, Search } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ArrowLeftRight, Building2, Package, Plus, Send, X } from 'lucide-react';
+import { apiFetch } from '../api';
+import { InventoryItem } from '../types';
 
-interface TransferRecord {
-  id: string;
-  date: string;
-  fromLocation: string;
-  toLocation: string;
-  itemCount: number;
-  totalValue: number;
-  status: 'Completed' | 'Pending' | 'Draft';
-}
+type Location = { id: string; name: string };
+type Transfer = { id: string; created_at: string; from_location: string; to_location: string; item_name: string; quantity: number; uom: string; total_value: number; notes?: string; status: string };
+const control = 'w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 focus:border-cyan-500 focus:outline-none';
 
 export const TransfersView: React.FC = () => {
-  const [transfers] = useState<TransferRecord[]>([
-    { id: 'TRF-1001', date: '2026-09-21', fromLocation: 'Main Kitchen', toLocation: 'Bar Lounge', itemCount: 4, totalValue: 245.50, status: 'Completed' },
-    { id: 'TRF-1002', date: '2026-09-20', fromLocation: 'Dry Storage', toLocation: 'Prep Station 2', itemCount: 7, totalValue: 512.10, status: 'Completed' },
-    { id: 'TRF-1003', date: '2026-09-19', fromLocation: 'Walk-in Freezer', toLocation: 'Main Kitchen', itemCount: 3, totalValue: 180.00, status: 'Pending' },
-  ]);
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-            <ArrowLeftRight className="w-6 h-6 text-cyan-400" />
-            Inventory Transfers
-          </h2>
-          <p className="text-slate-400 text-sm">Transfer stock items between locations, bars, prep stations, and dry storage</p>
-        </div>
-        <button className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm font-semibold flex items-center gap-2 shadow-lg shadow-cyan-950/40">
-          <Plus className="w-4 h-4" />
-          New Transfer
-        </button>
-      </div>
-
-      {/* Filter / Search Bar */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="relative w-full sm:w-72">
-          <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-3" />
-          <input
-            type="text"
-            placeholder="Search transfers..."
-            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-zinc-700"
-          />
-        </div>
-        <div className="flex items-center gap-3 text-xs text-zinc-400">
-          <span>Filter Status:</span>
-          <span className="bg-zinc-800 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 font-semibold cursor-pointer">All</span>
-          <span className="hover:bg-zinc-800 text-zinc-400 px-3 py-1.5 rounded-lg font-semibold cursor-pointer">Completed</span>
-          <span className="hover:bg-zinc-800 text-zinc-400 px-3 py-1.5 rounded-lg font-semibold cursor-pointer">Pending</span>
-        </div>
-      </div>
-
-      {/* Transfers List */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-xl">
-        <table className="w-full text-left text-sm text-zinc-200">
-          <thead className="bg-zinc-950 text-zinc-400 uppercase text-xs font-semibold tracking-wider border-b border-zinc-800">
-            <tr>
-              <th className="p-4">Transfer Ref</th>
-              <th className="p-4">Date</th>
-              <th className="p-4">From Location</th>
-              <th className="p-4">To Location</th>
-              <th className="p-4 text-center">Items</th>
-              <th className="p-4 text-right">Value</th>
-              <th className="p-4 text-center">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-800">
-            {transfers.map((trf) => (
-              <tr key={trf.id} className="hover:bg-zinc-800/50 transition-colors">
-                <td className="p-4 font-mono font-semibold text-cyan-400">{trf.id}</td>
-                <td className="p-4 text-zinc-400">{trf.date}</td>
-                <td className="p-4 text-zinc-300 flex items-center gap-2">
-                  <Building2 className="w-4 h-4 text-zinc-500" />
-                  {trf.fromLocation}
-                </td>
-                <td className="p-4 text-zinc-300">
-                  <div className="flex items-center gap-2">
-                    <ArrowLeftRight className="w-3.5 h-3.5 text-cyan-400" />
-                    {trf.toLocation}
-                  </div>
-                </td>
-                <td className="p-4 text-center">
-                  <span className="inline-flex items-center gap-1 bg-zinc-800 text-zinc-300 text-xs px-2.5 py-1 rounded-md border border-zinc-700 font-medium">
-                    <Package className="w-3.5 h-3.5 text-zinc-400" />
-                    {trf.itemCount} items
-                  </span>
-                </td>
-                <td className="p-4 text-right font-bold text-slate-100">
-                  ${trf.totalValue.toFixed(2)}
-                </td>
-                <td className="p-4 text-center">
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${
-                    trf.status === 'Completed' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                  }`}>
-                    {trf.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  const [locations, setLocations] = useState<Location[]>([]), [items, setItems] = useState<InventoryItem[]>([]), [transfers, setTransfers] = useState<Transfer[]>([]), [open, setOpen] = useState(false), [error, setError] = useState(''), [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ from_location_id: '', to_location_id: '', inventory_item_id: '', quantity: '', uom: '', notes: '' });
+  const load = async () => { const [me, itemData, transferData] = await Promise.all([apiFetch('/api/admin/me'), apiFetch('/api/items'), apiFetch('/api/transfers')]); setLocations((await me.json()).locations || []); setItems((await itemData.json()) || []); setTransfers((await transferData.json()) || []); };
+  useEffect(() => { load().catch(() => setError('Unable to load transfer information.')); }, []);
+  const start = () => { const source = localStorage.getItem('reserve_location_id') || locations[0]?.id || ''; setForm({ from_location_id: source, to_location_id: locations.find(l => l.id !== source)?.id || '', inventory_item_id: '', quantity: '', uom: '', notes: '' }); setError(''); setOpen(true); };
+  const item = items.find(i => i.id === form.inventory_item_id);
+  // Match the unit choices on count sheets and waste logs. Purchase labels are
+  // not necessarily inventory units (e.g. "1 / 40 LB") and cannot be counted
+  // or valued unless the item master has an explicit conversion for them.
+  const enabledUnits = (inventoryItem?: InventoryItem) => {
+    if (!inventoryItem) return [];
+    if (inventoryItem.enabled_count_units?.length) return inventoryItem.enabled_count_units.map(unit => unit.toUpperCase());
+    const units = new Set([inventoryItem.base_uom?.toUpperCase()]);
+    inventoryItem.conversions?.forEach(conversion => { units.add(conversion.from_uom.toUpperCase()); units.add(conversion.to_uom.toUpperCase()); });
+    return ['CS', 'SLV', 'PK', 'BTL', 'EA'].filter(unit => units.has(unit));
+  };
+  const submit = async (e: React.FormEvent) => { e.preventDefault(); setSaving(true); setError(''); try { const response = await apiFetch('/api/transfers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, quantity: Number(form.quantity), uom: form.uom || item?.base_uom || 'EA' }) }); const body = await response.text(); let data: any; try { data = JSON.parse(body); } catch { throw new Error(response.ok ? 'The transfer server returned an unreadable response. Please try again.' : body || `Unable to create transfer (${response.status}).`); } if (!response.ok) throw new Error(data.detail || 'Unable to create transfer.'); setTransfers(current => [data, ...current]); setOpen(false); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to create transfer.'); } finally { setSaving(false); } };
+  if (locations.length < 2) return <div className="space-y-6"><div><h2 className="flex items-center gap-2 text-2xl font-bold text-slate-100"><ArrowLeftRight className="h-6 w-6 text-cyan-400" />Restaurant transfers</h2><p className="mt-1 text-sm text-zinc-400">Move inventory between restaurants in the same organization.</p></div><div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/60 p-10 text-center"><Building2 className="mx-auto h-9 w-9 text-cyan-400" /><h3 className="mt-4 text-lg font-semibold text-zinc-100">Add another restaurant to begin transfers</h3><p className="mx-auto mt-2 max-w-lg text-sm text-zinc-400">Transfers are enabled once your organization has at least two locations and your account has access to both.</p></div></div>;
+  return <div className="space-y-6"><div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="flex items-center gap-2 text-2xl font-bold text-slate-100"><ArrowLeftRight className="h-6 w-6 text-cyan-400" />Restaurant transfers</h2><p className="mt-1 text-sm text-zinc-400">Move items between your restaurants and keep both inventory ledgers in sync.</p></div><button onClick={start} className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-500"><Plus className="h-4 w-4" />New transfer</button></div>{error && !open && <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div>}<div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900"><table className="w-full text-left text-sm"><thead className="bg-zinc-950 text-xs uppercase tracking-wider text-zinc-500"><tr><th className="p-4">Date</th><th className="p-4">Route</th><th className="p-4">Item</th><th className="p-4">Quantity</th><th className="p-4 text-right">Value</th></tr></thead><tbody className="divide-y divide-zinc-800">{transfers.length ? transfers.map(t => <tr key={t.id} className="text-zinc-300"><td className="p-4 text-zinc-400">{new Date(t.created_at).toLocaleDateString()}</td><td className="p-4"><span>{t.from_location}</span><ArrowLeftRight className="mx-2 inline h-3.5 w-3.5 text-cyan-400" /><span>{t.to_location}</span></td><td className="p-4 font-medium text-zinc-100">{t.item_name}{t.notes && <p className="mt-1 text-xs font-normal text-zinc-500">{t.notes}</p>}</td><td className="p-4"><Package className="mr-1 inline h-4 w-4 text-zinc-500" />{t.quantity} {t.uom}</td><td className="p-4 text-right font-semibold text-zinc-100">${Number(t.total_value).toFixed(2)}</td></tr>) : <tr><td colSpan={5} className="p-12 text-center text-zinc-500">No restaurant transfers yet.</td></tr>}</tbody></table></div>{open && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"><form onSubmit={submit} className="w-full max-w-xl rounded-2xl border border-zinc-700 bg-zinc-900 p-6 shadow-2xl"><div className="flex items-start justify-between"><div><h3 className="text-lg font-bold text-zinc-100">New restaurant transfer</h3><p className="mt-1 text-sm text-zinc-400">The item is recorded as out at the source and in at the destination.</p></div><button type="button" onClick={() => setOpen(false)} className="text-zinc-500 hover:text-zinc-200"><X /></button></div>{error && <div className="mt-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-200">{error}</div>}<div className="mt-5 grid gap-4 sm:grid-cols-2"><label className="text-sm text-zinc-300">From restaurant<select value={form.from_location_id} onChange={e => setForm({ ...form, from_location_id: e.target.value })} className={`${control} mt-1.5`}>{locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label><label className="text-sm text-zinc-300">To restaurant<select value={form.to_location_id} onChange={e => setForm({ ...form, to_location_id: e.target.value })} className={`${control} mt-1.5`}>{locations.filter(l => l.id !== form.from_location_id).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label></div><label className="mt-4 block text-sm text-zinc-300">Item<select value={form.inventory_item_id} onChange={e => { const selected = items.find(i => i.id === e.target.value); const units = enabledUnits(selected); setForm({ ...form, inventory_item_id: e.target.value, uom: units[0] || selected?.base_uom || '' }); }} className={`${control} mt-1.5`} required><option value="">Choose an inventory item</option>{items.filter(i => i.is_active).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label><div className="mt-4 grid gap-4 sm:grid-cols-2"><label className="text-sm text-zinc-300">Quantity<input type="number" min="0.0001" step="any" required value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} className={`${control} mt-1.5`} /></label><label className="text-sm text-zinc-300">Unit<select value={form.uom} onChange={e => setForm({ ...form, uom: e.target.value })} className={`${control} mt-1.5`}>{(enabledUnits(item).length ? enabledUnits(item) : [item?.base_uom || 'EA']).map(unit => <option key={unit} value={unit}>{unit}</option>)}</select></label></div><label className="mt-4 block text-sm text-zinc-300">Note <span className="text-zinc-600">(optional)</span><textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} className={`${control} mt-1.5 resize-none`} placeholder="Reason or delivery details" /></label><div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setOpen(false)} className="rounded-lg px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button><button disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500 disabled:opacity-60"><Send className="h-4 w-4" />{saving ? 'Saving…' : 'Transfer item'}</button></div></form></div>}</div>;
 };
-

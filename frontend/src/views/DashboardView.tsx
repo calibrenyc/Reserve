@@ -43,10 +43,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 
   return <div className="-m-8 min-h-screen bg-black">
-    <header className="h-14 bg-[#075c3b] px-8 flex items-center justify-between shadow-lg shadow-emerald-950/30">
-      <div className="flex items-center gap-3 text-white"><Home className="w-5 h-5 fill-white" /><span className="font-black tracking-[0.18em] text-sm">RESERVE OPERATIONS</span></div>
-      <div className="flex items-center gap-3 text-sm font-semibold text-emerald-50"><CloudSun className="w-5 h-5" /><span>Local Back-Office</span></div>
-    </header>
     <div className="max-w-6xl mx-auto px-8 py-7">
       <div className="flex justify-between items-start border-b border-zinc-800 pb-6 mb-7">
         <div className="flex items-center gap-3">

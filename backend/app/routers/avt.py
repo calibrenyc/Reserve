@@ -1,6 +1,6 @@
 import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
@@ -10,6 +10,7 @@ router = APIRouter(prefix="/api/reports/avt", tags=["Actual vs Theoretical"])
 
 @router.get("")
 def get_avt_report(
+    request: Request,
     start_date_str: Optional[str] = None,
     end_date_str: Optional[str] = None,
     category: Optional[str] = None,
@@ -30,5 +31,4 @@ def get_avt_report(
         except Exception:
             pass
 
-    return AvTEngine.calculate_avt(db, start_date, end_date, category_filter=category)
-
+    return AvTEngine.calculate_avt(db, start_date, end_date, category_filter=category, location_id=request.state.location_id)

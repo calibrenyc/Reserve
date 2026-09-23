@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, s
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from backend.app.database import get_db
+from backend.app.database import get_db, current_location_id
 from backend.app.models import (
     Invoice, InvoiceLine, Vendor, VendorItem, InventoryItem,
     InventoryTransaction, CostHistory, AuditLog
@@ -29,7 +29,7 @@ os.makedirs(INVOICE_DIR, exist_ok=True)
 
 @router.get("", response_model=List[InvoiceResponse])
 def list_invoices(status_filter: Optional[str] = None, db: Session = Depends(get_db)):
-    query = db.query(Invoice)
+    query = db.query(Invoice).filter(Invoice.location_id == current_location_id.get())
     if status_filter:
         query = query.filter(Invoice.status == status_filter)
     return [api_invoice(inv) for inv in query.order_by(Invoice.created_at.desc()).all()]

@@ -5,6 +5,8 @@ export interface Vendor {
   contact_email?: string;
   contact_phone?: string;
   address?: string;
+  website?: string;
+  notes?: string;
   is_active: boolean;
   created_at: string;
   conversions?: { from_uom: string; to_uom: string; factor: number }[];
@@ -20,6 +22,7 @@ export interface InventoryItem {
   base_uom: string;
   purchase_uom?: string;
   reporting_uom?: string;
+  enabled_count_units?: string[];
   current_cost: number;
   previous_cost: number;
   average_cost: number;
@@ -127,4 +130,3 @@ export interface Deposit {
   notes?: string;
   created_at: string;
 }
-

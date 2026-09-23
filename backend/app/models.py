@@ -1,7 +1,7 @@
 import uuid
 import datetime
 from sqlalchemy import (
-    Column, String, Integer, Float, Numeric, DateTime, Date, ForeignKey, Text, Boolean, Enum
+    Column, String, Integer, Float, Numeric, DateTime, Date, ForeignKey, Text, Boolean, Enum, JSON
 )
 from sqlalchemy.orm import relationship
 from backend.app.database import Base
@@ -98,11 +98,14 @@ class Vendor(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     name = Column(String, nullable=False, unique=True)
     account_number = Column(String, nullable=True)
     contact_email = Column(String, nullable=True)
     contact_phone = Column(String, nullable=True)
     address = Column(Text, nullable=True)
+    website = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -157,6 +160,9 @@ class InventoryItem(Base):
     sort_order = Column(Integer, nullable=True)
     storage_area_id = Column(String, ForeignKey("storage_areas.id"), nullable=True)
     count_uom = Column(String, nullable=True)
+    # Physical count controls are an explicit workbook contract.  They are not
+    # inferred from packaging conversions or the item's internal base unit.
+    enabled_count_units = Column(JSON, nullable=True)
     recipe_uom = Column(String, nullable=True)
     pack_size = Column(String, nullable=True)
     case_size = Column(String, nullable=True)
@@ -362,6 +368,29 @@ class InventoryTransaction(Base):
 
     inventory_item = relationship("InventoryItem", back_populates="transactions")
 
+class InventoryTransfer(Base):
+    __tablename__ = "inventory_transfers"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    from_location_id = Column(String, ForeignKey("locations.id"), nullable=False)
+    to_location_id = Column(String, ForeignKey("locations.id"), nullable=False)
+    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
+    destination_inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
+    quantity = Column(Numeric(12, 4), nullable=False)
+    uom = Column(String, nullable=False)
+    base_quantity = Column(Numeric(12, 4), nullable=False)
+    unit_cost = Column(Numeric(12, 4), nullable=False)
+    total_value = Column(Numeric(12, 2), nullable=False)
+    notes = Column(Text, nullable=True)
+    status = Column(String, default="Completed")
+
+    inventory_item = relationship("InventoryItem", foreign_keys=[inventory_item_id])
+    destination_inventory_item = relationship("InventoryItem", foreign_keys=[destination_inventory_item_id])
+    from_location = relationship("Location", foreign_keys=[from_location_id])
+    to_location = relationship("Location", foreign_keys=[to_location_id])
+
 class WasteLog(Base):
     __tablename__ = "waste_logs"
 
@@ -386,27 +415,76 @@ class Recipe(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     organization_id = Column(String, ForeignKey("organizations.id"), nullable=True, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     name = Column(String, nullable=False, unique=True)
     pos_identifier = Column(String, nullable=True)
     category = Column(String, default="Entree")
+    area = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    recipe_type = Column(String, default="MENU_ITEM")
     serving_yield = Column(Numeric(12, 2), default=1.0)
     menu_price = Column(Numeric(12, 2), default=0.0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
-    ingredients = relationship("RecipeIngredient", back_populates="recipe", cascade="all, delete-orphan")
+    ingredients = relationship("RecipeIngredient", back_populates="recipe", cascade="all, delete-orphan", foreign_keys="RecipeIngredient.recipe_id")
+    variants = relationship("RecipeVariant", back_populates="recipe", cascade="all, delete-orphan")
+
+class RecipeVariant(Base):
+    __tablename__ = "recipe_variants"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    recipe_id = Column(String, ForeignKey("recipes.id"), nullable=False)
+    name = Column(String, nullable=False, default="Standard")
+    yield_quantity = Column(Numeric(12, 4), default=1)
+    yield_unit = Column(String, default="EA")
+    serving_size = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
+    recipe = relationship("Recipe", back_populates="variants")
+    ingredients = relationship("RecipeIngredient", back_populates="variant", cascade="all, delete-orphan")
 
 class RecipeIngredient(Base):
     __tablename__ = "recipe_ingredients"
 
     id = Column(String, primary_key=True, default=generate_uuid)
     recipe_id = Column(String, ForeignKey("recipes.id"), nullable=False)
-    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
+    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
+    recipe_variant_id = Column(String, ForeignKey("recipe_variants.id"), nullable=True)
+    sub_recipe_id = Column(String, ForeignKey("recipes.id"), nullable=True)
     quantity = Column(Numeric(12, 4), nullable=False, default=1.0)
     uom = Column(String, nullable=False, default="OZ")
+    waste_percent = Column(Numeric(6, 3), nullable=True)
+    notes = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0)
+    original_uom = Column(String, nullable=True)
 
-    recipe = relationship("Recipe", back_populates="ingredients")
+    recipe = relationship("Recipe", back_populates="ingredients", foreign_keys=[recipe_id])
     inventory_item = relationship("InventoryItem", back_populates="recipe_ingredients")
+    variant = relationship("RecipeVariant", back_populates="ingredients")
+    sub_recipe = relationship("Recipe", foreign_keys=[sub_recipe_id])
+
+class ItemAlias(Base):
+    __tablename__ = "item_aliases"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
+    alias = Column(String, nullable=False)
+    normalized_alias = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class RecipeImport(Base):
+    __tablename__ = "recipe_imports"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), nullable=False, index=True)
+    location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
+    filename = Column(String, nullable=False)
+    importer = Column(String, nullable=False)
+    uploaded_by = Column(String, nullable=True)
+    recipes_detected = Column(Integer, default=0)
+    recipes_imported = Column(Integer, default=0)
+    warnings_json = Column(Text, nullable=True)
+    review_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class SalesImport(Base):
     __tablename__ = "sales_imports"
