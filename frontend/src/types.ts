@@ -7,6 +7,7 @@ export interface Vendor {
   address?: string;
   is_active: boolean;
   created_at: string;
+  conversions?: { from_uom: string; to_uom: string; factor: number }[];
 }
 
 export interface InventoryItem {
@@ -27,6 +28,7 @@ export interface InventoryItem {
   is_key_item: boolean;
   is_active: boolean;
   created_at: string;
+  conversions?: { from_uom: string; to_uom: string; factor: number }[];
 }
 
 export interface InvoiceLine {

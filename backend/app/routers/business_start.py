@@ -17,6 +17,10 @@ FIELD_ALIASES = {
     "purchase_uom": ["purchase unit", "purchase uom", "buy unit"], "base_uom": ["base unit", "base uom", "unit"],
     "pack_size": ["pack size", "pack"], "case_size": ["case size", "case"], "current_cost": ["cost", "current cost", "price"],
     "quantity": ["quantity", "qty", "on hand", "physical count"], "par_level": ["par", "par level"], "vendor": ["vendor", "supplier"], "vendor_sku": ["vendor sku", "sku", "item #", "item number"],
+    "area": ["area", "department", "section"], "zone": ["zone", "storage zone", "location"],
+    "brand": ["brand", "manufacturer"], "item_type": ["item type", "type"],
+    "pack_quantity": ["pack quantity", "pack qty", "case quantity"], "unit_size": ["unit size", "size"],
+    "price": ["price", "cost", "current cost", "unit cost"],
 }
 
 def suggested_mapping(headers):
@@ -31,6 +35,38 @@ def suggested_mapping(headers):
             if any(set(alias.split()).issubset(words) for alias in aliases): return raw
         return None
     return {field: find_column(aliases) for field, aliases in FIELD_ALIASES.items()}
+
+def split_area_zone(value):
+    value = (value or "").strip()
+    if " - " in value:
+        return tuple(part.strip() for part in value.split(" - ", 1))
+    return "", value
+
+def normalized_row(source, mapping, index, db):
+    row = {field: (str(source.get(column, "")).strip() if column else "") for field, column in mapping.items()}
+    combined_area, combined_zone = split_area_zone(row.get("storage_location"))
+    row["area"] = row.get("area") or combined_area
+    row["zone"] = row.get("zone") or combined_zone or "Unassigned"
+    row["item_number"] = row.get("vendor_sku", "")
+    row["price"] = row.get("price") or row.get("current_cost", "")
+    row["item_type"] = (row.get("item_type") or "").upper()
+    row["sort_order"] = index + 1
+    row["active"] = True
+    row["warnings"] = []
+    if not row.get("item_type"):
+        row["item_type"] = "PURCHASED"
+        row["warnings"].append("Item type defaulted to PURCHASED; review if this is prepared or operational.")
+    if not row.get("count_uom"):
+        row["warnings"].append("Count unit could not be determined confidently.")
+    existing = db.query(InventoryItem).filter(InventoryItem.sku == row["item_number"]).first() if row["item_number"] else None
+    existing = existing or (db.query(InventoryItem).filter(InventoryItem.name.ilike(row.get("item_name", ""))).first() if row.get("item_name") else None)
+    row["duplicate_id"] = existing.id if existing else None
+    row["action"] = "use_existing" if existing else "create_new"
+    row["confidence"] = 1.0 if not row["warnings"] else .75
+    row["source_row"] = index + 1
+    row["selected"] = True
+    row["status"] = "Possible Duplicate" if existing else ("Needs Review" if row["warnings"] else "Ready")
+    return row
 
 def status_for(row):
     if not row.get("item_name"): return "Missing Name"
@@ -73,8 +109,8 @@ async def preview_import(file: UploadFile = File(...), user=Depends(require("ite
     mapping = suggested_mapping(headers)
     rows = []
     for index, source in enumerate(raw_rows):
-        row = {field: (source.get(column, "") if column else "") for field, column in mapping.items()}
-        row.update({"index": index, "selected": True, "status": status_for(row), "source": source})
+        row = normalized_row(source, mapping, index, db)
+        row.update({"index": index, "source": source})
         rows.append(row)
     imp = ItemImport(filename=filename, source_type=ext, mapping_json=json.dumps(mapping), rows_json=json.dumps(rows), status="Preview")
     db.add(imp); db.commit(); db.refresh(imp)
@@ -93,19 +129,31 @@ def update_preview(import_id: str, payload: dict, user=Depends(require("items.im
 def finish_import(import_id: str, payload: dict = {}, user=Depends(require("items.import")), db: Session = Depends(get_db)):
     imp = db.get(ItemImport, import_id)
     if not imp: raise HTTPException(404, "Import not found")
-    rows = payload.get("rows", json.loads(imp.rows_json)); created = []
+    rows = payload.get("rows", json.loads(imp.rows_json)); imported = []
     for row in rows:
         if not row.get("selected") or not row.get("item_name", "").strip(): continue
-        name = row["item_name"].strip(); existing = db.query(InventoryItem).filter(InventoryItem.name.ilike(name)).first()
-        if existing: continue  # preview exposes duplicate; never silently merge or overwrite
-        item = InventoryItem(name=name, display_name=name, category=row.get("category") or "Uncategorized", subcategory=row.get("subcategory") or None, storage_location=row.get("storage_location") or "Unassigned", base_uom=row.get("base_uom") or row.get("count_uom") or "EA", count_uom=row.get("count_uom") or row.get("base_uom") or "EA", purchase_uom=row.get("purchase_uom") or None, pack_size=row.get("pack_size") or None, case_size=row.get("case_size") or None, par_level=Decimal(str(row["par_level"])) if row.get("par_level") else None, current_cost=Decimal(str(row["current_cost"])) if row.get("current_cost") else 0, needs_review=row.get("status") != "Ready", created_from_import=True, source_import_id=imp.id)
-        db.add(item); db.flush(); created.append(item)
+        name = row["item_name"].strip(); existing = db.get(InventoryItem, row.get("duplicate_id")) if row.get("duplicate_id") else None
+        existing = existing or db.query(InventoryItem).filter(InventoryItem.name.ilike(name)).first()
+        if existing and row.get("action") == "use_existing":
+            imported.append(existing); continue
+        values = {"display_name": name, "category": row.get("category") or "Uncategorized", "storage_location": " - ".join(part for part in [row.get("area"), row.get("zone")] if part) or "Unassigned", "base_uom": row.get("base_uom") or row.get("count_uom") or "EA", "count_uom": row.get("count_uom") or row.get("base_uom") or "EA", "purchase_uom": row.get("purchase_uom") or None, "sku": row.get("item_number") or None, "brand": row.get("brand") or None, "item_type": row.get("item_type") or None, "pack_quantity": Decimal(str(row["pack_quantity"])) if row.get("pack_quantity") else None, "unit_size": row.get("unit_size") or None, "pack_size": row.get("pack_size") or None, "current_cost": Decimal(str(row["price"])) if row.get("price") else 0, "sort_order": int(row.get("sort_order") or 0), "needs_review": row.get("status") != "Ready", "created_from_import": True, "source_import_id": imp.id}
+        if existing:
+            if row.get("action") != "update_existing": continue
+            for key, value in values.items(): setattr(existing, key, value)
+            item = existing
+        else:
+            item = InventoryItem(name=name, **values); db.add(item); db.flush()
+        imported.append(item)
     imp.status = "Imported"; db.commit()
     # Generate one location count sheet using item IDs, ordered by storage area.
-    if created:
-        template = InventoryCountTemplate(name="Business Start Count Sheet", location_id=imp.location_id)
-        db.add(template); db.flush()
-        for order, item in enumerate(sorted(created, key=lambda x: (x.storage_location, x.name))):
+    if imported:
+        template = db.query(InventoryCountTemplate).filter(InventoryCountTemplate.name == "Business Start Count Sheet").first()
+        if not template:
+            template = InventoryCountTemplate(name="Business Start Count Sheet", location_id=imp.location_id)
+            db.add(template); db.flush()
+        else:
+            template.lines.clear(); db.flush()
+        for order, item in enumerate(sorted({item.id: item for item in imported}.values(), key=lambda x: x.sort_order if x.sort_order is not None else 999999)):
             db.add(InventoryCountTemplateLine(template_id=template.id, inventory_item_id=item.id, storage_location=item.storage_location, sort_order=order))
         db.commit()
-    return {"created": len(created), "count_sheet_created": bool(created)}
+    return {"created": len([row for row in rows if row.get("selected") and row.get("action") == "create_new"]), "count_sheet_created": bool(imported)}

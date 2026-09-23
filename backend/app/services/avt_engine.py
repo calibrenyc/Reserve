@@ -36,6 +36,22 @@ class AvTEngine:
         if conv_inv and conv_inv.factor != 0:
             return Decimal("1.0") / Decimal(str(conv_inv.factor))
 
+        # Follow a product's packaging chain, e.g. CS -> SLV -> EA.  Packaging
+        # differs by item, so conversions are never hard-coded globally.
+        conversions = db.query(UnitConversion).filter(UnitConversion.inventory_item_id == item_id).all()
+        graph = {}
+        for row in conversions:
+            source, target, factor = row.from_uom.upper(), row.to_uom.upper(), Decimal(str(row.factor))
+            graph.setdefault(source, []).append((target, factor))
+            if factor: graph.setdefault(target, []).append((source, Decimal("1") / factor))
+        pending, visited = [(from_uom.upper(), Decimal("1"))], set()
+        while pending:
+            unit, factor = pending.pop(0)
+            if unit in visited: continue
+            if unit == to_uom.upper(): return factor
+            visited.add(unit)
+            pending.extend((next_unit, factor * next_factor) for next_unit, next_factor in graph.get(unit, []) if next_unit not in visited)
+
         # Special common units fallback
         f_u = from_uom.upper()
         t_u = to_uom.upper()

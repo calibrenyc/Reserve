@@ -91,6 +91,9 @@ async def enforce_api_access(request, call_next):
             "items.view" if path.startswith("/api/items") and request.method == "GET" else
             "items.create" if path.startswith("/api/items") and request.method == "POST" else
             "items.edit" if path.startswith("/api/items") else
+            "waste.view" if path.startswith("/api/inventory/waste") and request.method == "GET" else
+            "waste.create" if path.startswith("/api/inventory/waste") and request.method == "POST" else
+            "waste.delete" if path.startswith("/api/inventory/waste") and request.method == "DELETE" else
             "inventory.view" if path.startswith("/api/inventory") and request.method == "GET" else
             "inventory.count" if path.startswith("/api/inventory") else
             "recipes.view" if path.startswith("/api/recipes") and request.method == "GET" else

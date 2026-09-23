@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Plus, TrendingUp, History, Trash2, RotateCcw } from 'lucide-react';
+import { Package, Plus, TrendingUp, History, Trash2, RotateCcw, RefreshCw } from 'lucide-react';
 import { InventoryItem } from '../types';
+import { apiFetch } from '../api';
+
+interface CountTemplate { id: string; name: string; line_count: number; }
 
 export const InventoryItemsView: React.FC = () => {
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -8,6 +11,10 @@ export const InventoryItemsView: React.FC = () => {
   const [pendingArchive, setPendingArchive] = useState<InventoryItem | null>(null);
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [countTemplates, setCountTemplates] = useState<CountTemplate[]>([]);
+  const [showCountSheetSync, setShowCountSheetSync] = useState(false);
+  const [syncingTemplateId, setSyncingTemplateId] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState('');
 
   // Form State
   const [name, setName] = useState('');
@@ -35,6 +42,24 @@ export const InventoryItemsView: React.FC = () => {
   useEffect(() => {
     fetchItems();
   }, [showArchived]);
+
+  useEffect(() => {
+    apiFetch('/api/inventory/count-templates').then(res => res.ok ? res.json() : []).then(data => setCountTemplates(Array.isArray(data) ? data : [])).catch(() => setCountTemplates([]));
+  }, []);
+
+  const syncToCountSheet = async (template: CountTemplate) => {
+    setSyncingTemplateId(template.id);
+    setSyncMessage('');
+    try {
+      const response = await apiFetch(`/api/inventory/count-templates/${template.id}/sync-items`, { method: 'POST' });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(result?.detail || 'Unable to sync the count sheet.');
+      setCountTemplates(current => current.map(row => row.id === template.id ? { ...row, line_count: result.line_count } : row));
+      setSyncMessage(`${result.line_count} active items are now on ${template.name}.`);
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : 'Unable to sync the count sheet.');
+    } finally { setSyncingTemplateId(null); }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,7 +104,7 @@ export const InventoryItemsView: React.FC = () => {
         <h2 className="text-2xl font-bold text-zinc-100">Items</h2>
         <p className="text-zinc-400 text-sm">The central item master for counts, invoices, vendors, recipes, transfers, waste, purchasing, and reporting.</p>
       </div>
-      <div className="flex gap-3"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search items or categories" className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm"/><label className="text-sm text-zinc-400 flex items-center gap-2"><input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)}/> Show archived</label></div>
+      <div className="flex flex-wrap items-center gap-3"><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search items or categories" className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm"/><label className="text-sm text-zinc-400 flex items-center gap-2"><input type="checkbox" checked={showArchived} onChange={e=>setShowArchived(e.target.checked)}/> Show archived</label><button onClick={() => { setSyncMessage(''); setShowCountSheetSync(true); }} className="ml-auto inline-flex items-center gap-2 rounded-lg border border-emerald-600/50 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/20"><RefreshCw className="h-4 w-4" />Sync with Count Sheet</button></div>
 
       {/* Add Item Form */}
       <form onSubmit={handleCreate} className="bg-zinc-900 border border-zinc-700 p-4 rounded-xl flex items-center gap-3">
@@ -188,6 +213,8 @@ export const InventoryItemsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {showCountSheetSync && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="sync-count-sheet-title"><div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-6 shadow-2xl"><h3 id="sync-count-sheet-title" className="text-lg font-bold text-zinc-100">Sync with Count Sheet</h3><p className="mt-2 text-sm text-zinc-400">Choose a count sheet to include every active item. Item storage areas determine where each item appears on the sheet.</p>{countTemplates.length === 0 ? <p className="mt-4 rounded-lg border border-dashed border-zinc-700 bg-zinc-950 p-3 text-sm text-zinc-400">Create or import a count sheet first.</p> : <div className="mt-4 space-y-2">{countTemplates.map(template => <button key={template.id} disabled={Boolean(syncingTemplateId)} onClick={() => syncToCountSheet(template)} className="flex w-full items-center justify-between rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-left hover:border-emerald-500/60 disabled:opacity-50"><span><span className="block text-sm font-semibold text-zinc-100">{template.name}</span><span className="text-xs text-zinc-400">{template.line_count} items</span></span><span className="text-xs font-semibold text-emerald-400">{syncingTemplateId === template.id ? 'Syncing…' : 'Sync'}</span></button>)}</div>}{syncMessage && <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{syncMessage}</p>}<div className="mt-5 flex justify-end"><button onClick={() => setShowCountSheetSync(false)} className="rounded-lg px-4 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800">Close</button></div></div></div>}
 
       {/* Cost History Modal */}
       {selectedCostHistory && (

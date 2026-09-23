@@ -10,7 +10,7 @@ from backend.app.models import User, Role, RolePermission, UserPermissionOverrid
 ALL_PERMISSIONS = [
     "dashboard.view", "invoices.view", "invoices.create", "invoices.edit", "invoices.delete", "invoices.approve",
     "inventory.view", "inventory.manage", "inventory.count", "inventory.adjust", "inventory.approve_adjustments",
-    "transfers.view", "transfers.create", "transfers.approve", "waste.view", "waste.create", "waste.edit", "waste.approve",
+    "transfers.view", "transfers.create", "transfers.approve", "waste.view", "waste.create", "waste.edit", "waste.approve", "waste.delete",
     "recipes.view", "recipes.manage", "recipes.view_costs", "sales.view", "sales.import", "sales.manage",
     "deposits.view", "deposits.create", "deposits.edit", "deposits.approve", "financials.view", "financials.view_costs",
     "financials.view_vendor_spend", "financials.view_food_cost", "financials.view_avt", "financials.view_deposits", "financials.export",

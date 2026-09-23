@@ -150,6 +150,11 @@ class InventoryItem(Base):
     location_id = Column(String, ForeignKey("locations.id"), nullable=True, index=True)
     display_name = Column(String, nullable=True)
     description = Column(Text, nullable=True)
+    brand = Column(String, nullable=True)
+    item_type = Column(String, nullable=True)  # PURCHASED, PREPARED, OPERATIONAL
+    pack_quantity = Column(Numeric(12, 4), nullable=True)
+    unit_size = Column(String, nullable=True)
+    sort_order = Column(Integer, nullable=True)
     storage_area_id = Column(String, ForeignKey("storage_areas.id"), nullable=True)
     count_uom = Column(String, nullable=True)
     recipe_uom = Column(String, nullable=True)
@@ -327,6 +332,11 @@ class InventoryCountLine(Base):
     base_quantity = Column(Numeric(12, 4), nullable=False, default=0.0)
     unit_cost = Column(Numeric(12, 4), nullable=False, default=0.0)
     extended_value = Column(Numeric(12, 2), nullable=False, default=0.0)
+    cs_qty = Column(Numeric(12, 4), nullable=True, default=0.0)
+    slv_qty = Column(Numeric(12, 4), nullable=True, default=0.0)
+    pk_qty = Column(Numeric(12, 4), nullable=True, default=0.0)
+    btl_qty = Column(Numeric(12, 4), nullable=True, default=0.0)
+    ea_qty = Column(Numeric(12, 4), nullable=True, default=0.0)
 
     count = relationship("InventoryCount", back_populates="lines")
     inventory_item = relationship("InventoryItem", back_populates="count_lines")

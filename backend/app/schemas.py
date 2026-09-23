@@ -165,6 +165,11 @@ class InventoryCountLineBase(BaseModel):
     storage_location: Optional[str] = "Main Storage"
     counted_quantity: Decimal
     counted_uom: str
+    cs_qty: Optional[Decimal] = None
+    slv_qty: Optional[Decimal] = None
+    pk_qty: Optional[Decimal] = None
+    btl_qty: Optional[Decimal] = None
+    ea_qty: Optional[Decimal] = None
 
 class InventoryCountCreate(BaseModel):
     name: str = "Count Sheet"

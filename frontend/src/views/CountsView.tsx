@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Boxes, Plus, FileSpreadsheet, Minus, Plus as PlusIcon } from 'lucide-react';
+import { Boxes, Plus, FileSpreadsheet, Minus, Plus as PlusIcon, Trash2 } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { apiFetch } from '../api';
 
@@ -12,12 +12,19 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(entryMode);
   const [countLines, setCountLines] = useState<{ [itemId: string]: string }>({});
+  const [unitCounts, setUnitCounts] = useState<Record<string, Record<string, string>>>({});
   const [activeArea, setActiveArea] = useState<string>('');
   const [itemsLoadFailed, setItemsLoadFailed] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [templates, setTemplates] = useState<CountTemplate[]>([]);
   const [templateLines, setTemplateLines] = useState<TemplateLine[] | null>(null);
   const [editingTemplate, setEditingTemplate] = useState<{ id: string; name: string; lines: TemplateLine[] } | null>(null);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [templateSaveError, setTemplateSaveError] = useState('');
+  const [templatePendingDeletion, setTemplatePendingDeletion] = useState<CountTemplate | null>(null);
+  const [deletingTemplate, setDeletingTemplate] = useState(false);
+  const [templateDeleteError, setTemplateDeleteError] = useState('');
   const countInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const fetchCounts = () => {
@@ -68,13 +75,15 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
   }, [editCountId]);
 
   const handleSaveCount = async () => {
-    const lines = Object.entries(countLines).filter(([, qty]) => qty !== '').map(([itemId, qty]) => {
-      const item = countItems.find(i => i.id === itemId);
+    const lines = countItems.filter(item => countLines[item.id] !== '' || Object.values(unitCounts[item.id] || {}).some(qty => qty !== '')).map(item => {
+      const quantities = unitCounts[item.id] || {};
+      const qty = quantities[item.base_uom] ?? countLines[item.id] ?? '0';
       return {
-        inventory_item_id: itemId,
+        inventory_item_id: item.id,
         counted_quantity: Number(qty),
-        counted_uom: item?.base_uom || 'LB',
-        storage_location: item?.storage_location || 'Unassigned'
+        counted_uom: item.base_uom || 'CS',
+        storage_location: item.storage_location || 'Unassigned',
+        cs_qty: Number(quantities.CS || 0), slv_qty: Number(quantities.SLV || 0), pk_qty: Number(quantities.PK || 0), btl_qty: Number(quantities.BTL || 0), ea_qty: Number(quantities.EA || 0)
       };
     });
 
@@ -100,9 +109,33 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
   const areaItems = countItems.filter(item => (item.storage_location || 'Unassigned') === selectedArea);
   const areaCompleted = areaItems.filter(item => Object.prototype.hasOwnProperty.call(countLines, item.id) && countLines[item.id] !== '').length;
   const totalCompleted = countItems.filter(item => Object.prototype.hasOwnProperty.call(countLines, item.id) && countLines[item.id] !== '').length;
-  const totalValue = countItems.reduce((total, item) => total + (Number(countLines[item.id] || 0) * Number(item.current_cost || 0)), 0);
 
   const updateQuantity = (itemId: string, value: string) => setCountLines(current => ({ ...current, [itemId]: value }));
+  const enabledUnits = (item: InventoryItem) => {
+    const units = new Set([item.base_uom?.toUpperCase()]);
+    item.conversions?.forEach(conversion => { units.add(conversion.from_uom.toUpperCase()); units.add(conversion.to_uom.toUpperCase()); });
+    return ['CS', 'SLV', 'PK', 'BTL', 'EA'].filter(unit => units.has(unit));
+  };
+  const unitFactor = (item: InventoryItem, fromUnit: string) => {
+    const target = item.base_uom.toUpperCase();
+    const queue: [string, number][] = [[fromUnit, 1]], seen = new Set<string>();
+    while (queue.length) {
+      const [unit, factor] = queue.shift()!;
+      if (unit === target) return factor;
+      if (seen.has(unit)) continue; seen.add(unit);
+      item.conversions?.forEach(conversion => {
+        const from = conversion.from_uom.toUpperCase(), to = conversion.to_uom.toUpperCase(), amount = Number(conversion.factor);
+        if (from === unit) queue.push([to, factor * amount]);
+        if (to === unit && amount) queue.push([from, factor / amount]);
+      });
+    }
+    return fromUnit === target ? 1 : 0;
+  };
+  const unitCost = (item: InventoryItem, unit: string) => Number(item.current_cost || 0) * unitFactor(item, unit);
+  const itemValue = (item: InventoryItem) => enabledUnits(item).reduce((total, unit) => total + Number(unitCounts[item.id]?.[unit] || 0) * unitCost(item, unit), 0);
+  const totalValue = countItems.reduce((total, item) => total + itemValue(item), 0);
+  const updateUnitQuantity = (itemId: string, unit: string, value: string) => setUnitCounts(current => ({ ...current, [itemId]: { ...(current[itemId] || {}), [unit]: value } }));
+  const adjustUnitQuantity = (itemId: string, unit: string, change: number) => updateUnitQuantity(itemId, unit, String(Math.max(0, Number(unitCounts[itemId]?.[unit] || 0) + change)));
   const adjustQuantity = (itemId: string, change: number) => {
     const currentValue = Number(countLines[itemId] || 0);
     updateQuantity(itemId, String(Math.max(0, Number((currentValue + change).toFixed(2)))));
@@ -126,6 +159,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
 
   const handleTemplateImport = async (file?: File) => {
     if (!file) return;
+    setImportMessage(null);
     setImporting(true);
     try {
       const form = new FormData(); form.append('file', file);
@@ -135,13 +169,53 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
       try { result = JSON.parse(text); }
       catch { throw new Error(response.ok ? 'The server returned an unreadable import result. Please refresh and try again.' : `Import failed (${response.status}).`); }
       if (!response.ok) throw new Error(result.detail || 'Import failed');
-      alert(`Count sheet imported: ${result.created} new items, ${result.updated} updated. ${result.areas.length} areas are ready to count.`);
+      setImportMessage({ type: 'success', text: `Imported ${result.template_name}: ${result.created} new items, ${result.updated} updated, across ${result.areas.length} count areas.` });
       const itemsResponse = await apiFetch('/api/items');
       setItems(await itemsResponse.json());
       fetchTemplates();
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Count sheet import failed.');
+      setImportMessage({ type: 'error', text: error instanceof Error ? error.message : 'Count sheet import failed.' });
     } finally { setImporting(false); }
+  };
+
+  const handleDeleteTemplate = async () => {
+    if (!templatePendingDeletion) return;
+    setDeletingTemplate(true);
+    setTemplateDeleteError('');
+    try {
+      const response = await apiFetch(`/api/inventory/count-templates/${templatePendingDeletion.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || 'Unable to delete the spreadsheet template.');
+      }
+      if (editingTemplate?.id === templatePendingDeletion.id) setEditingTemplate(null);
+      setTemplatePendingDeletion(null);
+      fetchTemplates();
+    } catch (error) {
+      setTemplateDeleteError(error instanceof Error ? error.message : 'Unable to delete the spreadsheet template.');
+    } finally { setDeletingTemplate(false); }
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!editingTemplate) return;
+    setSavingTemplate(true);
+    setTemplateSaveError('');
+    try {
+      const response = await apiFetch(`/api/inventory/count-templates/${editingTemplate.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editingTemplate)
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || 'Unable to save the count sheet.');
+      }
+      const itemsResponse = await apiFetch('/api/items');
+      if (!itemsResponse.ok) throw new Error('The count sheet saved, but the item list could not be refreshed.');
+      setItems(await itemsResponse.json());
+      setEditingTemplate(null);
+      fetchTemplates();
+    } catch (error) {
+      setTemplateSaveError(error instanceof Error ? error.message : 'Unable to save the count sheet.');
+    } finally { setSavingTemplate(false); }
   };
 
   return (
@@ -155,7 +229,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
         <label className="cursor-pointer px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold text-sm rounded-xl flex items-center space-x-2 border border-zinc-700">
           <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
           <span>{importing ? 'Importing…' : 'Import Count Sheet'}</span>
-          <input type="file" accept=".xlsx" className="hidden" disabled={importing} onChange={e => { handleTemplateImport(e.target.files?.[0]); e.currentTarget.value = ''; }} />
+          <input type="file" accept=".xlsx,.pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf" className="hidden" disabled={importing} onChange={e => { handleTemplateImport(e.target.files?.[0]); e.currentTarget.value = ''; }} />
         </label>
         <button
           onClick={() => { setActiveArea(''); onNewCount ? onNewCount() : setShowCreateModal(true); }}
@@ -168,9 +242,13 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
       </div>}
 
       {!entryMode && <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-4">
-        <div className="mb-3"><h3 className="font-bold text-zinc-100">Count templates</h3><p className="text-xs text-zinc-400">Import a sheet to save it as a reusable template. Use Edit template to move items between count areas.</p></div>
-        {templates.length === 0 ? <p className="rounded-lg border border-dashed border-zinc-700 bg-zinc-950 p-3 text-sm text-zinc-400">No templates yet. Select <span className="font-semibold text-emerald-400">Import Count Sheet</span> above to create one.</p> : <div className="flex flex-wrap gap-3">{templates.map(template => <div key={template.id} className="flex items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2"><div><p className="text-sm font-semibold text-zinc-200">{template.name}</p><p className="text-xs text-zinc-400">{template.line_count} items</p></div><button onClick={() => onNewCount?.(template.id)} className="rounded bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 cursor-pointer">Start count</button><button onClick={() => fetch(`/api/inventory/count-templates/${template.id}`).then(res => res.json()).then(setEditingTemplate)} className="rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs font-semibold text-zinc-100 hover:bg-zinc-700 cursor-pointer">Edit template</button></div>)}</div>}
+        <div className="mb-3"><h3 className="font-bold text-zinc-100">Count templates</h3><p className="text-xs text-zinc-400">Import an Excel or text-based PDF sheet to save it as a reusable template. Use Edit template to move items between count areas.</p></div>
+        {templates.length === 0 ? <p className="rounded-lg border border-dashed border-zinc-700 bg-zinc-950 p-3 text-sm text-zinc-400">No templates yet. Select <span className="font-semibold text-emerald-400">Import Count Sheet</span> above to create one.</p> : <div className="flex flex-wrap gap-3">{templates.map(template => <div key={template.id} className="flex items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2"><div><p className="text-sm font-semibold text-zinc-200">{template.name}</p><p className="text-xs text-zinc-400">{template.line_count} items</p></div><button onClick={() => onNewCount?.(template.id)} className="rounded bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 cursor-pointer">Start count</button><button onClick={() => { setTemplateSaveError(''); apiFetch(`/api/inventory/count-templates/${template.id}`).then(res => res.ok ? res.json() : Promise.reject(new Error('Unable to load the count sheet.'))).then(setEditingTemplate).catch(error => setTemplateSaveError(error.message)); }} className="rounded bg-zinc-800 border border-zinc-700 px-2.5 py-1.5 text-xs font-semibold text-zinc-100 hover:bg-zinc-700 cursor-pointer">Edit template</button><button aria-label={`Delete ${template.name} spreadsheet template`} title="Delete spreadsheet" onClick={() => { setTemplateDeleteError(''); setTemplatePendingDeletion(template); }} className="rounded border border-red-900/70 bg-red-950/40 p-1.5 text-red-400 hover:bg-red-900/60 hover:text-red-200 cursor-pointer"><Trash2 className="h-3.5 w-3.5" /></button></div>)}</div>}
       </div>}
+
+      {!entryMode && importMessage && <div role="status" className={`rounded-lg border p-3 text-sm ${importMessage.type === 'success' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-red-500/30 bg-red-500/10 text-red-200'}`}><div className="flex items-center justify-between gap-3"><span>{importMessage.text}</span><button onClick={() => setImportMessage(null)} className="shrink-0 text-xs font-semibold opacity-80 hover:opacity-100">Dismiss</button></div></div>}
+
+      {templatePendingDeletion && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-labelledby="delete-template-title" className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"><h3 id="delete-template-title" className="text-lg font-bold text-zinc-100">Delete spreadsheet?</h3><p className="mt-2 text-sm text-zinc-300">Delete <span className="font-semibold text-zinc-100">{templatePendingDeletion.name}</span>? Its inventory items and completed count sheets will be kept.</p>{templateDeleteError && <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{templateDeleteError}</p>}<div className="mt-5 flex justify-end gap-3"><button disabled={deletingTemplate} onClick={() => setTemplatePendingDeletion(null)} className="rounded px-3 py-2 text-sm font-semibold text-zinc-300 hover:bg-zinc-800 disabled:opacity-50">Cancel</button><button disabled={deletingTemplate} onClick={handleDeleteTemplate} className="rounded bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50">{deletingTemplate ? 'Deleting…' : 'Delete spreadsheet'}</button></div></div></div>}
 
       {/* Counts List */}
       {!entryMode && <div className="bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden shadow-xl">
@@ -219,7 +297,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
         </table>
       </div>}
 
-      {!entryMode && editingTemplate && <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-5"><div className="mb-4"><h3 className="text-lg font-bold text-zinc-100">Edit template: {editingTemplate.name}</h3><p className="text-xs text-zinc-400">Change count areas and unit dollars here. Dollar changes update the item cost used for all valuations.</p></div><div className="mb-2 flex items-center gap-3 px-2 text-[10px] font-bold uppercase tracking-wider text-zinc-400"><span className="min-w-0 flex-1">Item</span><span className="w-24">Unit cost ($)</span><span className="w-44">Count area</span></div><div className="max-h-[60vh] space-y-2 overflow-y-auto">{editingTemplate.lines.map((line, index) => <div key={line.inventory_item_id} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-2"><span className="min-w-0 flex-1 text-sm font-semibold text-zinc-200">{line.item_name}</span><input aria-label={`${line.item_name} unit cost`} type="number" min="0" step="0.01" value={line.current_cost} onChange={e => setEditingTemplate(current => current ? { ...current, lines: current.lines.map((row, rowIndex) => rowIndex === index ? { ...row, current_cost: Number(e.target.value) } : row) } : current)} className="w-24 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-emerald-400 font-bold" /><input aria-label={`${line.item_name} count area`} value={line.storage_location} onChange={e => setEditingTemplate(current => current ? { ...current, lines: current.lines.map((row, rowIndex) => rowIndex === index ? { ...row, storage_location: e.target.value } : row) } : current)} className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100" /></div>)}</div><div className="mt-4 flex justify-end gap-3 border-t border-zinc-800 pt-4"><button onClick={() => setEditingTemplate(null)} className="text-sm text-zinc-400 hover:text-zinc-100 cursor-pointer">Cancel</button><button onClick={async () => { await Promise.all(editingTemplate.lines.map(line => fetch(`/api/items/${line.inventory_item_id}/cost`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current_cost: line.current_cost }) }))); await fetch(`/api/inventory/count-templates/${editingTemplate.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editingTemplate) }); setItems(await (await fetch('/api/items')).json()); setEditingTemplate(null); fetchTemplates(); }} className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 cursor-pointer">Save template & dollars</button></div></div>}
+      {!entryMode && editingTemplate && <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-5"><div className="mb-4"><h3 className="text-lg font-bold text-zinc-100">Edit template: {editingTemplate.name}</h3><p className="text-xs text-zinc-400">Change count areas and unit dollars here. Dollar changes update the item cost used for all valuations.</p></div>{templateSaveError && <p className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{templateSaveError}</p>}<div className="mb-2 flex items-center gap-3 px-2 text-[10px] font-bold uppercase tracking-wider text-zinc-400"><span className="min-w-0 flex-1">Item</span><span className="w-24">Unit cost ($)</span><span className="w-44">Count area</span></div><div className="max-h-[60vh] space-y-2 overflow-y-auto">{editingTemplate.lines.map((line, index) => <div key={line.inventory_item_id} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-2"><span className="min-w-0 flex-1 text-sm font-semibold text-zinc-200">{line.item_name}</span><input aria-label={`${line.item_name} unit cost`} type="number" min="0" step="0.01" value={line.current_cost} onChange={e => setEditingTemplate(current => current ? { ...current, lines: current.lines.map((row, rowIndex) => rowIndex === index ? { ...row, current_cost: Number(e.target.value) } : row) } : current)} className="w-24 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-emerald-400 font-bold" /><input aria-label={`${line.item_name} count area`} value={line.storage_location} onChange={e => setEditingTemplate(current => current ? { ...current, lines: current.lines.map((row, rowIndex) => rowIndex === index ? { ...row, storage_location: e.target.value } : row) } : current)} className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100" /></div>)}</div><div className="mt-4 flex justify-end gap-3 border-t border-zinc-800 pt-4"><button disabled={savingTemplate} onClick={() => setEditingTemplate(null)} className="text-sm text-zinc-400 hover:text-zinc-100 cursor-pointer disabled:opacity-50">Cancel</button><button disabled={savingTemplate} onClick={handleSaveTemplate} className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 cursor-pointer disabled:opacity-50">{savingTemplate ? 'Saving…' : 'Save template & dollars'}</button></div></div>}
 
       {/* Create Count Modal */}
       {showCreateModal && (
@@ -255,9 +333,9 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
                 <div key={item.id} className="flex items-center justify-between gap-3 bg-zinc-950 p-3 rounded-lg border border-zinc-800">
                   <div>
                     <p className="font-semibold text-zinc-200">{item.name}</p>
-                    <p className="text-xs text-zinc-400">Base Unit: {item.base_uom} | Cost: ${Number(item.current_cost ?? 0).toFixed(2)} | <span className="font-semibold text-emerald-400">Value: ${(Number(countLines[item.id] || 0) * Number(item.current_cost ?? 0)).toFixed(2)}</span></p>
+                    <p className="text-xs text-zinc-400">{enabledUnits(item).map(unit => `${unit}: $${unitCost(item, unit).toFixed(2)}`).join(' | ')} | <span className="font-semibold text-emerald-400">Value: ${itemValue(item).toFixed(2)}</span></p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
+                  <><div className="flex max-w-[60%] shrink-0 flex-wrap justify-end gap-2">{enabledUnits(item).map(unit => <div key={unit} className="flex items-center gap-1"><button type="button" onClick={() => adjustUnitQuantity(item.id, unit, -1)} className="grid h-10 w-10 place-items-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300"><Minus className="h-4 w-4" /></button><input type="number" min="0" step="0.1" value={unitCounts[item.id]?.[unit] ?? ''} onFocus={e => e.currentTarget.select()} onChange={e => updateUnitQuantity(item.id, unit, e.target.value)} className="h-10 w-20 rounded border border-zinc-700 bg-zinc-900 px-2 text-center font-bold text-zinc-100"/><button type="button" onClick={() => adjustUnitQuantity(item.id, unit, 1)} className="grid h-10 w-10 place-items-center rounded-md border border-emerald-700/70 bg-emerald-950 text-emerald-300"><PlusIcon className="h-4 w-4" /></button><span className="w-7 text-xs font-mono text-zinc-400">{unit}</span></div>)}</div><div className="hidden">
                     <button type="button" aria-label={`Subtract one ${item.base_uom} from ${item.name}`} onClick={() => adjustQuantity(item.id, -1)} className="grid h-10 w-10 place-items-center rounded-md border border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 cursor-pointer"><Minus className="h-4 w-4" /></button>
                     <input
                       ref={element => { countInputRefs.current[item.id] = element; }}
@@ -273,7 +351,7 @@ export const CountsView: React.FC<CountsViewProps> = ({ onNewCount, onEditCount,
                     />
                     <button type="button" aria-label={`Add one ${item.base_uom} to ${item.name}`} onClick={() => adjustQuantity(item.id, 1)} className="grid h-10 w-10 place-items-center rounded-md border border-emerald-700/70 bg-emerald-950 text-emerald-300 hover:bg-emerald-900 cursor-pointer"><PlusIcon className="h-4 w-4" /></button>
                     <span className="text-xs text-zinc-400 font-mono">{item.base_uom}</span>
-                  </div>
+                  </div></>
                 </div>
               ))}
                 </div>
