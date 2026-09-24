@@ -4,7 +4,7 @@ from typing import List, Optional
 from decimal import Decimal
 
 from backend.app.database import get_db, current_location_id, current_organization_id
-from backend.app.models import InventoryItem, UnitConversion, CostHistory, ItemCategory, StorageArea
+from backend.app.models import InventoryItem, UnitConversion, CostHistory, ItemCategory, StorageArea, ItemAlias
 from backend.app.security import require
 from backend.app.schemas import InventoryItemCreate, InventoryItemResponse, UnitConversionCreate, UnitConversionResponse
 
@@ -57,10 +57,47 @@ def create_inventory_item(item_in: InventoryItemCreate, db: Session = Depends(ge
 def update_item(item_id: str, payload: dict, db: Session = Depends(get_db)):
     item = db.get(InventoryItem, item_id)
     if not item: raise HTTPException(404, "Item not found")
-    allowed = {"name", "display_name", "description", "category", "subcategory", "storage_location", "base_uom", "count_uom", "purchase_uom", "recipe_uom", "pack_size", "case_size", "conversion_factor", "current_cost", "par_level", "notes", "needs_review", "is_active"}
+    allowed = {"name", "display_name", "description", "category", "subcategory", "storage_location", "base_uom", "count_uom", "purchase_uom", "recipe_uom", "pack_size", "case_size", "pack_count", "pack_unit_quantity", "pack_unit", "pack_size_raw", "conversion_factor", "current_cost", "par_level", "notes", "needs_review", "is_active"}
     for key, value in payload.items():
         if key in allowed: setattr(item, key, value)
     db.commit(); db.refresh(item); return item
+
+@router.put("/{item_id}/conversions", response_model=InventoryItemResponse)
+def replace_item_conversions(item_id: str, conversions: List[UnitConversionBase], db: Session = Depends(get_db)):
+    """Admin item metadata; recipe rows consume it but never own conversions."""
+    item = db.get(InventoryItem, item_id)
+    if not item: raise HTTPException(404, "Inventory item not found")
+    normalized = set()
+    for conv in conversions:
+        source, target = conv.from_uom.strip().upper(), conv.to_uom.strip().upper()
+        if not source or not target or source == target or conv.factor <= 0:
+            raise HTTPException(400, "Each conversion needs different units and a positive factor.")
+        key = (source, target)
+        if key in normalized: raise HTTPException(400, "Duplicate conversion units are not allowed.")
+        normalized.add(key)
+    db.query(UnitConversion).filter(UnitConversion.inventory_item_id == item_id).delete()
+    for conv in conversions:
+        db.add(UnitConversion(inventory_item_id=item_id, from_uom=conv.from_uom.strip().upper(), to_uom=conv.to_uom.strip().upper(), factor=conv.factor))
+    db.commit(); db.refresh(item); return item
+
+@router.get("/{item_id}/aliases")
+def get_item_aliases(item_id: str, db: Session = Depends(get_db)):
+    if not db.get(InventoryItem, item_id): raise HTTPException(404, "Inventory item not found")
+    return [{"id": row.id, "alias": row.alias} for row in db.query(ItemAlias).filter(ItemAlias.inventory_item_id == item_id).order_by(ItemAlias.alias).all()]
+
+@router.put("/{item_id}/aliases")
+def replace_item_aliases(item_id: str, aliases: List[str], db: Session = Depends(get_db)):
+    item = db.get(InventoryItem, item_id)
+    if not item: raise HTTPException(404, "Inventory item not found")
+    clean = []
+    for alias in aliases:
+        value = " ".join(str(alias or "").split())
+        if value and value.casefold() != item.name.casefold() and value.casefold() not in {v.casefold() for v in clean}: clean.append(value)
+    db.query(ItemAlias).filter(ItemAlias.inventory_item_id == item_id).delete()
+    for alias in clean:
+        db.add(ItemAlias(organization_id=item.organization_id, inventory_item_id=item.id, alias=alias, normalized_alias=alias.casefold()))
+    db.commit()
+    return {"item_id": item.id, "aliases": clean}
 
 @router.post("/{item_id}/archive")
 def archive_item(item_id: str, db: Session = Depends(get_db)):

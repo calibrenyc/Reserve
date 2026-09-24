@@ -9,6 +9,13 @@ export const RecipesView: React.FC = () => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [expandedRecipeIds, setExpandedRecipeIds] = useState<string[]>([]);
+  const [selectedVariantIds, setSelectedVariantIds] = useState<Record<string, string>>({});
+  const recipeIngredients = (recipe: any) => {
+    const variants = recipe.variants || [];
+    const selected = selectedVariantIds[recipe.id] || variants[0]?.id;
+    const variant = variants.find((entry: any) => entry.id === selected);
+    return variant ? variant.ingredients : recipe.ingredients;
+  };
   
   const [showModal, setShowModal] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -202,6 +209,7 @@ export const RecipesView: React.FC = () => {
           )}
 
           {/* Import Button */}
+          <a href="/api/recipes/imports/template" className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 font-semibold text-sm rounded-xl border border-zinc-700">Download Recipe Template</a>
           <label className="cursor-pointer px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-semibold text-sm rounded-xl flex items-center space-x-2 border border-zinc-700">
             <Upload className="w-4 h-4 text-emerald-400" />
             <span>{importing ? 'Reading…' : 'Import Recipes'}</span>
@@ -342,12 +350,12 @@ export const RecipesView: React.FC = () => {
                         <td className="p-3.5 text-zinc-400 font-medium">{r.category || 'General'}</td>
                         <td className="p-3.5 text-center font-semibold text-zinc-300">
                           <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 font-mono">
-                            {r.ingredients.length} items
+                            {recipeIngredients(r).length} items
                           </span>
                         </td>
                         <td className="p-3.5 text-right">
                           <span className="text-base font-extrabold text-emerald-400 font-mono">
-                            ${Number(r.recipe_cost || 0).toFixed(2)}
+                            {r.costing_status === 'COMPLETE' ? `$${Number(r.recipe_cost || 0).toFixed(2)}` : 'Cost unavailable'}
                           </span>
                         </td>
                         <td className="p-3.5 text-right font-bold">
@@ -373,24 +381,25 @@ export const RecipesView: React.FC = () => {
                             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
                               <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
                                 <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                                  Ingredient Cost Matrix ({r.ingredients.length} Items)
+                                  Ingredient Cost Matrix ({recipeIngredients(r).length} Items)
                                 </span>
                                 <span className="text-xs font-mono text-zinc-400">
                                   Yield: {r.serving_yield || 1} Serving(s)
                                 </span>
                               </div>
+                              {(r.variants || []).length > 1 && <select value={selectedVariantIds[r.id] || r.variants[0].id} onChange={e => setSelectedVariantIds(current => ({ ...current, [r.id]: e.target.value }))} className="mb-3 bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200"><>{r.variants.map((variant: any) => <option key={variant.id} value={variant.id}>{variant.name}</option>)}</></select>}
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                {r.ingredients.map((ing: any) => (
+                                {recipeIngredients(r).map((ing: any) => (
                                   <div key={ing.id} className="flex items-center justify-between bg-zinc-950 p-2.5 rounded-lg border border-zinc-800/80 text-xs">
                                     <div>
                                       <p className="font-semibold text-zinc-200">{ing.item_name}</p>
                                       <p className="text-[10px] text-zinc-400 font-mono">
-                                        Unit Cost: ${Number(ing.unit_cost || 0).toFixed(2)} / {ing.uom}
+                                        {ing.costing_status === 'COMPLETE' ? `Unit Cost: $${Number(ing.unit_cost).toFixed(2)} / ${ing.uom}` : 'Cost unavailable — conversion needed'}
                                       </p>
                                     </div>
                                     <div className="text-right">
                                       <p className="font-mono text-zinc-300">{ing.quantity} {ing.uom}</p>
-                                      <p className="font-mono font-bold text-emerald-400">${Number(ing.extended_cost || 0).toFixed(2)}</p>
+                                      <p className="font-mono font-bold text-emerald-400">{ing.extended_cost == null ? '—' : `$${Number(ing.extended_cost).toFixed(2)}`}</p>
                                     </div>
                                   </div>
                                 ))}
@@ -445,21 +454,21 @@ export const RecipesView: React.FC = () => {
                 <div className="bg-zinc-950 p-4 rounded-xl text-center border border-zinc-800/80 space-y-1">
                   <p className="text-xs text-zinc-400 font-semibold uppercase tracking-wider">Total Recipe Cost</p>
                   <p className="text-3xl font-black text-emerald-400 font-mono">
-                    ${Number(r.recipe_cost || 0).toFixed(2)}
+                    {r.costing_status === 'COMPLETE' ? `$${Number(r.recipe_cost || 0).toFixed(2)}` : 'Cost unavailable'}
                   </p>
                 </div>
 
                 {/* Ingredient Cost Matrix */}
                 <div className="space-y-1.5 pt-1">
                   <div className="flex justify-between items-center text-xs font-bold uppercase text-zinc-400">
-                    <span>Ingredients ({r.ingredients.length})</span>
+                    <span>Ingredients ({recipeIngredients(r).length})</span>
                     <span>Cost</span>
                   </div>
                   <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
-                    {r.ingredients.map((ing: any) => (
+                    {recipeIngredients(r).map((ing: any) => (
                       <div key={ing.id} className="flex justify-between text-xs text-zinc-300 bg-zinc-950/60 p-2 rounded-lg border border-zinc-800/40">
                         <span>{ing.item_name}</span>
-                        <span className="font-mono text-emerald-400 font-semibold">${Number(ing.extended_cost || 0).toFixed(2)}</span>
+                        <span className="font-mono text-emerald-400 font-semibold">{ing.extended_cost == null ? '—' : `$${Number(ing.extended_cost).toFixed(2)}`}</span>
                       </div>
                     ))}
                   </div>

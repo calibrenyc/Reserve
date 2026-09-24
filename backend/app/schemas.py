@@ -39,6 +39,10 @@ class VendorItemBase(BaseModel):
     vendor_sku: str
     description: str
     pack_size: Optional[str] = None
+    pack_count: Optional[Decimal] = None
+    pack_unit_quantity: Optional[Decimal] = None
+    pack_unit: Optional[str] = None
+    pack_size_raw: Optional[str] = None
     unit_of_measure: Optional[str] = None
     current_cost: Decimal = Decimal("0.00")
     mapped_inventory_item_id: Optional[str] = None

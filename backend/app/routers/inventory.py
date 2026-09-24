@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.app.database import get_db, current_location_id, current_organization_id
 from backend.app.models import (
     InventoryItem, InventoryCount, InventoryCountLine, InventoryTransaction,
-    WasteLog, AuditLog, InventoryCountTemplate, InventoryCountTemplateLine, UnitConversion, Location
+    WasteLog, AuditLog, InventoryCountTemplate, InventoryCountTemplateLine, UnitConversion, Location, ItemAlias
 )
 from backend.app.schemas import InventoryCountCreate, WasteLogCreate
 from backend.app.services.avt_engine import AvTEngine
@@ -37,12 +37,15 @@ def _catalog_item(db, item_id, organization_id=None):
 STANDARD_ALIASES = {
     "area": {"area", "area zone"}, "zone": {"zone"}, "item_number": {"item number", "item", "sku"},
     "item_name": {"item name", "name", "description brand"}, "brand": {"brand"}, "item_type": {"item type", "type"},
-    "pack_quantity": {"pack qty", "pack quantity"}, "unit_size": {"unit size"},
+    "pack_quantity": {"pack qty", "pack quantity"}, "pack_count": {"pack count"}, "pack_unit": {"pack unit"}, "base_unit": {"base unit"}, "unit_size": {"unit size"},
     "count_unit": {"count unit", "count uom", "recipe qty count unit"}, "price": {"price", "cost", "case cost"},
     "use_cs": {"use cs"}, "use_slv": {"use slv"}, "use_pk": {"use pk"}, "use_btl": {"use btl"}, "use_ea": {"use ea"},
     "conv_1_from": {"conv 1 from"}, "conv_1_to": {"conv 1 to"}, "conv_1_qty": {"conv 1 qty"},
     "conv_2_from": {"conv 2 from"}, "conv_2_to": {"conv 2 to"}, "conv_2_qty": {"conv 2 qty"},
     "recipe_unit": {"recipe unit"}, "vendor_pack_size": {"vendor pack size"},
+    "canonical_item_name": {"canonical item name"}, "purchase_unit": {"purchase unit"},
+    "units_per_purchase_unit": {"units per purchase unit"}, "recipe_units_per_purchase_unit": {"recipe units per purchase unit"},
+    "recipe_aliases": {"recipe aliases"}, "conversion_status": {"conversion status"},
     "sort_order": {"sort order", "sort"}, "active": {"active"},
 }
 
@@ -128,6 +131,19 @@ def _decimal(value: str, label: str, item_name: str) -> Decimal:
         raise HTTPException(status_code=400, detail=f"{label} must be greater than zero for {item_name}.")
     return amount
 
+def _parse_pack_size(value: str):
+    """Parse `6/32 FL OZ`, `8 x 5 LB`, or `24 EA` without guessing density."""
+    raw = (value or "").strip()
+    compact = re.sub(r"\s+", " ", raw.upper()).replace("×", "X")
+    match = re.match(r"^(?:(\d+(?:\.\d+)?)\s*(?:/|X)\s*)?(\d+(?:\.\d+)?)\s*(FL\s*OZ|OZ|LB|GAL|QT|PT|ML|L|EA|CT)\b", compact)
+    if not match:
+        return None
+    outer = Decimal(match.group(1) or "1")
+    quantity = Decimal(match.group(2))
+    unit = re.sub(r"\s+", "_", match.group(3))
+    unit = {"CT": "EA"}.get(unit, unit)
+    return {"raw": raw, "count": outer, "quantity": quantity, "unit": unit}
+
 def _standard_base_uom(enabled_units, conversions):
     """Use the terminal packaging unit internally without changing count controls."""
     if not conversions:
@@ -175,8 +191,11 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
         if header or standard_columns: break
     if not header and not standard_columns:
         raise HTTPException(status_code=400, detail="No recognizable inventory columns were found. This file does not appear to be a Reserve Standard sheet and Reserve could not confidently identify its inventory columns.")
+    enriched_workbook = bool(standard_columns and "canonical_item_name" in standard_columns and "units_per_purchase_unit" in standard_columns)
     if standardized_workbook:
-        required = {"area", "item_name", "use_cs", "use_slv", "use_pk", "use_btl", "use_ea", "conv_1_from", "conv_1_to", "conv_1_qty", "conv_2_from", "conv_2_to", "conv_2_qty", "price"}
+        # Identity is the only universal requirement. Pricing, pack facts,
+        # count flags, and conversions are optional item metadata.
+        required = {"item_name"}
         missing = sorted(required - set(standard_columns or {}))
         if missing:
             raise HTTPException(status_code=400, detail=f"Count Template is missing required standardized columns: {', '.join(missing)}.")
@@ -184,15 +203,27 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
         return next((col for label, col in header.items() if any(term in label for term in terms)), None)
     area_col, sku_col, desc_col, unit_col = (column("area", "zone"), column("item #", "item number", "sku"), column("description"), column("pack", "unit")) if header else (standard_columns.get("area") or standard_columns.get("zone"), standard_columns.get("item_number"), standard_columns.get("item_name"), standard_columns.get("vendor_pack_size") or standard_columns.get("unit_size") or standard_columns.get("count_unit"))
     created = updated = skipped = 0
+    warnings = []
+    items_with_cost = items_missing_cost = items_complete_conversions = items_missing_conversions = 0
     template_rows = []
     seen_names, seen_skus = set(), set()
     for row in data:
+        # Every optional field has a stable row-local default.  Incomplete
+        # source data is a costing concern, never an importer crash.
+        enabled_units, conversions, explicit_conversions = [], [], []
+        case_cost = current_cost = None
+        base_uom = None
+        pack = None
+        recipe_unit = recipe_quantity = ""
         name, area, sku = row.get(desc_col or "", "").strip(), row.get(area_col or "", "").strip(), row.get(sku_col or "", "").strip()
         if standard_columns:
             zone = row.get(standard_columns.get("zone", ""), "").strip()
             area = " - ".join(part for part in [area, zone] if part)
-        if not name or not area:
+        if not name:
             skipped += 1; continue
+        if not area:
+            area = "Unassigned"
+            warnings.append({"item": name, "code": "MISSING_AREA", "message": "Item imported without an inventory area."})
         normalized_name, normalized_sku = name.casefold(), sku.casefold()
         # PDFs often repeat the final line of one page at the top of the next.
         # Inventory item names and SKUs are unique, so retain the first row.
@@ -205,10 +236,26 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
         item = catalog.filter(InventoryItem.sku == sku).first() if sku else None
         item = item or catalog.filter(InventoryItem.name == name).first()
         unit = row.get(unit_col or "", "").strip()
-        enabled_units = []
-        conversions = []
-        case_cost = None
-        if standardized_workbook:
+        if enriched_workbook:
+            canonical = (row.get(standard_columns.get("canonical_item_name", ""), "") or "").strip()
+            purchase = (row.get(standard_columns.get("purchase_unit", ""), "") or "").strip().upper()
+            base_uom = (row.get(standard_columns.get("base_unit", ""), "") or "").strip().upper() or None
+            units_text = (row.get(standard_columns.get("units_per_purchase_unit", ""), "") or "").strip()
+            raw_price = (row.get(standard_columns.get("price", ""), "") or "").strip()
+            name = canonical or name
+            enabled_units = [purchase] if purchase else []
+            units = _decimal(units_text, "Units Per Purchase Unit", name) if units_text else None
+            case_cost = _decimal(raw_price, "Price", name) if raw_price else None
+            if purchase and base_uom and units:
+                conversions.append((purchase, base_uom, units))
+            current_cost = (case_cost / units) if case_cost is not None and units else None
+            conversion_status = (row.get(standard_columns.get("conversion_status", ""), "") or "").strip().upper() or None
+            if current_cost is None: items_missing_cost += 1; warnings.append({"item": name, "code": "MISSING_COST", "message": "Item imported without a current cost."})
+            else: items_with_cost += 1
+            if conversions: items_complete_conversions += 1
+            else: items_missing_conversions += 1; warnings.append({"item": name, "code": "MISSING_CONVERSION", "message": "Item imported without a usable conversion path."})
+            pack = {"count": _decimal((row.get(standard_columns.get("pack_count", ""), "") or "").strip(), "Pack Count", name) if (row.get(standard_columns.get("pack_count", ""), "") or "").strip() else None, "quantity": _decimal((row.get(standard_columns.get("pack_quantity", ""), "") or "").strip(), "Pack Qty", name) if (row.get(standard_columns.get("pack_quantity", ""), "") or "").strip() else None, "unit": (row.get(standard_columns.get("pack_unit", ""), "") or "").strip().upper() or None, "raw": unit}
+        elif standardized_workbook:
             enabled_units = [unit_name for unit_name in MULTI_COUNT_UNITS if _is_yes(row.get(standard_columns[f"use_{unit_name.lower()}"] or "", ""))]
             if not enabled_units:
                 raise HTTPException(status_code=400, detail=f"At least one Use column must be Y for {name}.")
@@ -220,12 +267,49 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
                     if not all((source, target, quantity)):
                         raise HTTPException(status_code=400, detail=f"Conv {number} must include From, To, and Qty for {name}.")
                     conversions.append((source, target, _decimal(quantity, f"Conv {number} Qty", name)))
+            explicit_conversions = list(conversions)
+            recipe_unit = (row.get(standard_columns.get("recipe_unit", ""), "") or "").strip().upper()
+            recipe_quantity = (row.get(standard_columns.get("count_unit", ""), "") or "").strip()
+            if explicit_conversions and recipe_unit and recipe_quantity:
+                recipe_factor = _decimal(recipe_quantity, "Recipe Qty / Count Unit", name)
+                source = explicit_conversions[-1][1]
+                if source != recipe_unit and (source, recipe_unit) not in {(a, b) for a, b, _ in conversions}:
+                    # This is an item-specific conversion supplied by the
+                    # standardized template (for example PK -> 3.5 OZ), not a
+                    # global cup/weight assumption.
+                    conversions.append((source, recipe_unit, recipe_factor))
+            base_uom = _standard_base_uom(enabled_units, explicit_conversions)
+            pack = _parse_pack_size(row.get(standard_columns.get("vendor_pack_size", ""), ""))
+            # Explicit template conversions are authoritative.  Parsed packs
+            # only fill missing deterministic links and never invent cups or
+            # other density-dependent recipe conversions.
+            if pack:
+                pairs = {(source, target) for source, target, _ in conversions}
+                container = "BTL" if "BTL" in enabled_units else ("SLV" if "SLV" in enabled_units and pack["unit"] == "EA" else None)
+                if not container:
+                    container = next((target for source, target, factor in explicit_conversions if source == "CS" and factor == pack["count"]), None)
+                if not container and explicit_conversions and explicit_conversions[-1][1] in enabled_units:
+                    container = explicit_conversions[-1][1]
+                if container and ("CS", container) not in pairs:
+                    conversions.append(("CS", container, pack["count"]))
+                    pairs.add(("CS", container))
+                source = container or "CS"
+                amount = pack["quantity"] if container else pack["count"] * pack["quantity"]
+                if source != pack["unit"] and (source, pack["unit"]) not in pairs:
+                    conversions.append((source, pack["unit"], amount))
+            # A recipe-unit conversion or parsed package unit is a proven
+            # consumable base. Count controls remain independent in
+            # enabled_count_units, so changing this does not alter the count UI.
+            conversion_targets = {target for _, target, _ in conversions}
+            if recipe_unit and recipe_unit in conversion_targets:
+                base_uom = recipe_unit
+            elif pack and pack["unit"] in conversion_targets:
+                base_uom = pack["unit"]
             case_cost_text = row.get(standard_columns["price"], "").strip()
             # Some standardized count rows represent open/prepped inventory and
             # intentionally have no vendor case price.  Blank means "do not
             # replace the known cost", while a supplied value must be numeric.
             case_cost = _decimal(case_cost_text, "Case Cost", name) if case_cost_text else None
-            base_uom = _standard_base_uom(enabled_units, conversions)
             # Current cost is always cost per internal base unit.  Case Cost is
             # authoritative and is never replaced with a guessed zero value.
             case_factor = Decimal("1")
@@ -242,26 +326,55 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
                 visited.add(current)
                 pending.extend((next_unit, factor * next_factor) for next_unit, next_factor in graph.get(current, []) if next_unit not in visited)
             current_cost = case_cost / case_factor if case_cost is not None else None
+            if current_cost is None:
+                items_missing_cost += 1
+                warnings.append({"item": name, "code": "MISSING_COST", "message": "Item imported without a current cost."})
+            else:
+                items_with_cost += 1
+            if conversions:
+                items_complete_conversions += 1
+            else:
+                items_missing_conversions += 1
+                warnings.append({"item": name, "code": "MISSING_CONVERSION", "message": "Item imported without a usable conversion path."})
+        else:
+            # Legacy sheets are still valid source documents, but this parser
+            # cannot claim structured cost/conversion facts it did not see.
+            items_missing_cost += 1
+            items_missing_conversions += 1
+            warnings.append({"item": name, "code": "MISSING_COST", "message": "Legacy row imported without a structured current cost."})
+            warnings.append({"item": name, "code": "MISSING_CONVERSION", "message": "Legacy row imported without structured conversion data."})
         if item:
             item.storage_location = area
             if sku and not item.sku: item.sku = sku
-            if standardized_workbook:
-                item.base_uom, item.count_uom = base_uom, enabled_units[0]
-                item.enabled_count_units, item.purchase_uom = enabled_units, "CS"
+            if standardized_workbook or enriched_workbook:
+                item.base_uom, item.count_uom = base_uom, (enabled_units[0] if enabled_units else None)
+                item.enabled_count_units, item.purchase_uom = enabled_units or None, (purchase if enriched_workbook else "CS")
+                if enriched_workbook: item.conversion_status = conversion_status
                 if current_cost is not None:
                     item.current_cost = current_cost
+                if pack:
+                    item.pack_count, item.pack_unit_quantity = pack["count"], pack["quantity"]
+                    item.pack_unit, item.pack_size_raw = pack["unit"], pack["raw"]
                 db.query(UnitConversion).filter(UnitConversion.inventory_item_id == item.id).delete()
                 for source, target, factor in conversions:
                     db.add(UnitConversion(inventory_item_id=item.id, from_uom=source, to_uom=target, factor=factor))
+                if enriched_workbook:
+                    db.query(ItemAlias).filter(ItemAlias.inventory_item_id == item.id).delete()
+                    for alias in str(row.get(standard_columns.get("recipe_aliases", ""), "")).split(";"):
+                        if alias.strip(): db.add(ItemAlias(organization_id=item.organization_id, inventory_item_id=item.id, alias=alias.strip(), normalized_alias=alias.strip().casefold()))
             updated += 1
         else:
             item = InventoryItem(name=name, sku=sku or None, storage_location=area,
-                base_uom=base_uom if standardized_workbook else "EA",
-                count_uom=enabled_units[0] if standardized_workbook else None,
+                base_uom=base_uom if (standardized_workbook or enriched_workbook) else "EA",
+                count_uom=enabled_units[0] if enabled_units else None,
                 enabled_count_units=enabled_units or None,
-                purchase_uom="CS" if standardized_workbook else unit,
-                reporting_uom=base_uom if standardized_workbook else "EA",
-                current_cost=current_cost if current_cost is not None else Decimal("0"), category="Food")
+                purchase_uom=(purchase if enriched_workbook else "CS") if (standardized_workbook or enriched_workbook) else unit,
+                reporting_uom=base_uom if (standardized_workbook or enriched_workbook) else "EA",
+                current_cost=current_cost, category="Food")
+            if enriched_workbook: item.conversion_status = conversion_status
+            if standardized_workbook and pack:
+                item.pack_count, item.pack_unit_quantity = pack["count"], pack["quantity"]
+                item.pack_unit, item.pack_size_raw = pack["unit"], pack["raw"]
             db.add(item); db.flush()
             for source, target, factor in conversions:
                 db.add(UnitConversion(inventory_item_id=item.id, from_uom=source, to_uom=target, factor=factor))
@@ -291,7 +404,12 @@ async def import_count_sheet_template(file: UploadFile = File(...), db: Session 
         if item:
             db.add(InventoryCountTemplateLine(template_id=template.id, inventory_item_id=item.id, storage_location=area, sort_order=order))
     commit_import()
-    return {"created": created, "updated": updated, "skipped": skipped, "standardized_workbook": standardized_workbook, "areas": sorted({area for _, _, area in template_rows}), "template_id": template.id, "template_name": template.name}
+    return {"success": True, "created": created, "updated": updated, "skipped": skipped,
+            "itemsDetected": len(template_rows) + skipped, "itemsImported": created + updated,
+            "itemsWithCosts": items_with_cost, "itemsMissingCosts": items_missing_cost,
+            "itemsWithCompleteConversions": items_complete_conversions, "itemsMissingConversions": items_missing_conversions,
+            "warnings": warnings, "standardized_workbook": standardized_workbook,
+            "areas": sorted({area for _, _, area in template_rows}), "template_id": template.id, "template_name": template.name}
 
 @router.get("/count-templates")
 def list_count_templates(request: Request, db: Session = Depends(get_db)):

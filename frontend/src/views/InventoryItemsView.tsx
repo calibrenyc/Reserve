@@ -73,9 +73,9 @@ export const InventoryItemsView: React.FC = () => {
         base_uom: baseUom,
         purchase_uom: purchaseUom,
         current_cost: parseFloat(currentCost) || 0.0,
-        conversions: [
-          { from_uom: purchaseUom, to_uom: baseUom, factor: 20.0 }
-        ]
+        // Conversions belong to the item master and must be entered from a
+        // real pack fact; never invent a 20-unit case for a new item.
+        conversions: []
       })
     });
     setName('');

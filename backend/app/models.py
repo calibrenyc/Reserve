@@ -157,6 +157,13 @@ class InventoryItem(Base):
     item_type = Column(String, nullable=True)  # PURCHASED, PREPARED, OPERATIONAL
     pack_quantity = Column(Numeric(12, 4), nullable=True)
     unit_size = Column(String, nullable=True)
+    # Structured purchase-pack facts retain the source text while allowing the
+    # conversion engine to calculate a provable purchase-to-recipe path.
+    pack_count = Column(Numeric(12, 4), nullable=True)
+    pack_unit_quantity = Column(Numeric(12, 4), nullable=True)
+    pack_unit = Column(String, nullable=True)
+    pack_size_raw = Column(String, nullable=True)
+    conversion_status = Column(String, nullable=True)
     sort_order = Column(Integer, nullable=True)
     storage_area_id = Column(String, ForeignKey("storage_areas.id"), nullable=True)
     count_uom = Column(String, nullable=True)
@@ -457,6 +464,8 @@ class RecipeIngredient(Base):
     notes = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0)
     original_uom = Column(String, nullable=True)
+    source_name = Column(String, nullable=True)
+    match_status = Column(String, nullable=True)
 
     recipe = relationship("Recipe", back_populates="ingredients", foreign_keys=[recipe_id])
     inventory_item = relationship("InventoryItem", back_populates="recipe_ingredients")

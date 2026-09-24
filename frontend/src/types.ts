@@ -21,7 +21,12 @@ export interface InventoryItem {
   storage_location: string;
   base_uom: string;
   purchase_uom?: string;
+  count_uom?: string;
   reporting_uom?: string;
+  pack_count?: number;
+  pack_unit_quantity?: number;
+  pack_unit?: string;
+  pack_size_raw?: string;
   enabled_count_units?: string[];
   current_cost: number;
   previous_cost: number;

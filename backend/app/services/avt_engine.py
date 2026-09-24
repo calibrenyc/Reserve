@@ -11,11 +11,76 @@ from backend.app.models import (
 )
 
 class AvTEngine:
+    _UOM_ALIASES = {
+        "EACH": "EA", "EACHES": "EA", "UNIT": "EA", "UNITS": "EA",
+        "CASE": "CS", "CASES": "CS", "CARTON": "BTL", "BOTTLE": "BTL",
+        "BOTTLES": "BTL", "POUCH": "PK", "POUCHES": "PK", "PACK": "PK",
+        "PACKS": "PK", "PACKET": "PK", "PACKETS": "PK", "SLEEVE": "SLV",
+        "SLEEVES": "SLV", "POUND": "LB", "POUNDS": "LB", "OUNCE": "OZ",
+        "OUNCES": "OZ", "FLUID OUNCE": "FL_OZ", "FLUID OUNCES": "FL_OZ",
+        "FL OZ": "FL_OZ", "FLOZ": "FL_OZ", "GALLON": "GAL", "GALLONS": "GAL",
+    }
+
+    @staticmethod
+    def normalize_uom(uom: str) -> str:
+        value = (uom or "").strip().upper().replace("-", "_")
+        return AvTEngine._UOM_ALIASES.get(value, value)
+
+    @staticmethod
+    def get_safe_unit_conversion_factor(db: Session, item_id: str, from_uom: str, to_uom: str) -> Optional[Decimal]:
+        """Return a proven conversion factor, or None when no safe path exists.
+
+        This is deliberately separate from the historic helper below: inventory
+        transaction callers retain their legacy behavior while recipes never get
+        to price an unknown conversion as one-to-one.
+        """
+        source, target = AvTEngine.normalize_uom(from_uom), AvTEngine.normalize_uom(to_uom)
+        if not source or not target:
+            return None
+        if source == target:
+            return Decimal("1")
+
+        conversions = db.query(UnitConversion).filter(UnitConversion.inventory_item_id == item_id).all()
+        graph = {}
+        for row in conversions:
+            start, end = AvTEngine.normalize_uom(row.from_uom), AvTEngine.normalize_uom(row.to_uom)
+            factor = Decimal(str(row.factor))
+            if not start or not end or factor <= 0:
+                continue
+            graph.setdefault(start, []).append((end, factor))
+            graph.setdefault(end, []).append((start, Decimal("1") / factor))
+
+        # Mathematical conversions are valid only inside the same dimension.
+        standard = {
+            "LB": ("weight", Decimal("453.59237")), "OZ": ("weight", Decimal("28.349523125")),
+            "G": ("weight", Decimal("1")), "KG": ("weight", Decimal("1000")),
+            "GAL": ("volume", Decimal("3785.411784")), "QT": ("volume", Decimal("946.352946")),
+            "PT": ("volume", Decimal("473.176473")), "FL_OZ": ("volume", Decimal("29.5735295625")),
+            "ML": ("volume", Decimal("1")), "L": ("volume", Decimal("1000")),
+        }
+        if source in standard and target in standard and standard[source][0] == standard[target][0]:
+            return standard[source][1] / standard[target][1]
+
+        pending, visited = [(source, Decimal("1"))], set()
+        while pending:
+            unit, factor = pending.pop(0)
+            if unit in visited:
+                continue
+            if unit == target:
+                return factor
+            visited.add(unit)
+            pending.extend((next_unit, factor * next_factor) for next_unit, next_factor in graph.get(unit, []) if next_unit not in visited)
+        return None
+
     @staticmethod
     def get_unit_conversion_factor(db: Session, item_id: str, from_uom: str, to_uom: str) -> Decimal:
         """Finds conversion factor to convert from_uom quantity to to_uom quantity."""
         if not from_uom or not to_uom or from_uom.upper() == to_uom.upper():
             return Decimal("1.0")
+
+        safe_factor = AvTEngine.get_safe_unit_conversion_factor(db, item_id, from_uom, to_uom)
+        if safe_factor is not None:
+            return safe_factor
 
         # Check direct conversion
         conv = db.query(UnitConversion).filter(
